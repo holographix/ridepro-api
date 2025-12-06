@@ -72,12 +72,55 @@ prisma.config.ts         # Prisma configuration (URLs)
 - `TimeSlot`: MORNING, AFTERNOON, EVENING
 - `GoalPriority`: A, B, C
 
-## API Structure (Planned)
+## API Endpoints
 
-```
-/api/users          # User management
-/api/workouts       # Workout library CRUD
-/api/calendar       # Training week/scheduled workouts
-/api/availability   # Athlete availability
-/api/goals          # Training goals
-```
+### Users (`/api/users`)
+- `GET /` - List all users
+- `GET /:id` - Get user by ID
+- `GET /clerk/:clerkUserId` - Get user by Clerk ID
+- `GET /:id/athletes` - Get coach's athletes
+- `POST /` - Create user
+- `PUT /:id` - Update user
+- `DELETE /:id` - Delete user
+- `POST /:athleteId/assign-coach/:coachId` - Assign coach to athlete
+- `DELETE /:athleteId/coach` - Remove coach from athlete
+
+### Workouts (`/api/workouts`)
+- `GET /` - List workouts (filters: categoryId, environment, intensity, durationCategory, search)
+- `GET /categories` - List all categories with workout counts
+- `GET /categories/:slug` - Get category with workouts
+- `GET /:id` - Get workout by ID
+- `GET /slug/:slug` - Get workout by slug
+- `POST /` - Create workout
+- `PUT /:id` - Update workout
+- `DELETE /:id` - Delete workout
+
+### Calendar (`/api/calendar`)
+- `GET /week/:athleteId?weekStart=` - Get training week
+- `GET /week/id/:id` - Get week by ID
+- `GET /weeks/:athleteId?start=&end=` - Get weeks in date range
+- `POST /week` - Create training week
+- `PUT /week/:id` - Update week notes
+- `DELETE /week/:id` - Delete week
+- `POST /scheduled` - Add workout to day
+- `PUT /scheduled/:id` - Update scheduled workout
+- `PUT /scheduled/:id/move` - Move workout to different day
+- `DELETE /scheduled/:id` - Remove scheduled workout
+- `PUT /scheduled/:id/complete` - Mark workout completed
+- `PUT /week/:weekId/day/:dayIndex/reorder` - Reorder workouts in a day
+
+### Availability (`/api/availability`)
+- `GET /:athleteId` - Get athlete's weekly availability
+- `PUT /:athleteId` - Set full week availability
+- `PUT /:athleteId/day/:dayIndex` - Set single day availability
+- `DELETE /:athleteId/day/:dayIndex` - Clear day availability
+- `DELETE /:athleteId` - Clear all availability
+
+### Goals (`/api/goals`)
+- `GET /athlete/:athleteId` - Get athlete's goals
+- `GET /athlete/:athleteId/upcoming` - Get upcoming goals
+- `GET /athlete/:athleteId/priority/:priority` - Get goals by priority (A/B/C)
+- `GET /:id` - Get goal by ID
+- `POST /` - Create goal
+- `PUT /:id` - Update goal
+- `DELETE /:id` - Delete goal
