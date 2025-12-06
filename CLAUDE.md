@@ -25,7 +25,25 @@ DATABASE_URL="..." npx prisma db push  # Push schema changes (use direct URL, po
 - **Framework**: NestJS
 - **ORM**: Prisma
 - **Database**: PostgreSQL (Supabase)
-- **Auth**: Clerk (planned)
+- **Auth**: Clerk
+
+## Authentication
+
+All endpoints require authentication via Clerk JWT token in the `Authorization` header:
+```
+Authorization: Bearer <clerk_token>
+```
+
+**Public endpoints** (no auth required):
+- `GET /` - Health check
+- `GET /health` - Health status
+- `GET /api/workouts/*` - All workout library read endpoints
+
+**Protected endpoints** require valid Clerk token. The user is auto-created in the database on first request.
+
+### Auth decorators
+- `@Public()` - Mark endpoint as public
+- `@CurrentUser()` - Get current authenticated user in controller
 
 ## Database Connection
 
@@ -42,7 +60,13 @@ DATABASE_URL="postgresql://...@aws-1-eu-central-1.pooler.supabase.com:5432/postg
 
 ```
 src/
+├── auth/                # Clerk authentication (guard, service, decorators)
 ├── prisma/              # Prisma service and module
+├── users/               # User management
+├── workouts/            # Workout library
+├── calendar/            # Training weeks and scheduled workouts
+├── availability/        # Athlete availability
+├── goals/               # Training goals
 ├── app.module.ts        # Root module
 └── main.ts              # Entry point
 
@@ -75,6 +99,8 @@ prisma.config.ts         # Prisma configuration (URLs)
 ## API Endpoints
 
 ### Users (`/api/users`)
+- `GET /me` - Get current authenticated user
+- `PUT /me` - Update current user profile
 - `GET /` - List all users
 - `GET /:id` - Get user by ID
 - `GET /clerk/:clerkUserId` - Get user by Clerk ID

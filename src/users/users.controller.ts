@@ -9,10 +9,22 @@ import {
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { Prisma } from '@prisma/client';
+import type { User } from '@prisma/client';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 @Controller('api/users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
+
+  @Get('me')
+  getMe(@CurrentUser() user: User) {
+    return this.usersService.findOne(user.id);
+  }
+
+  @Put('me')
+  updateMe(@CurrentUser() user: User, @Body() data: Prisma.UserUpdateInput) {
+    return this.usersService.update(user.id, data);
+  }
 
   @Get()
   findAll() {
