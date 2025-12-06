@@ -1,0 +1,226 @@
+// Prisma schema for RidePro Training Platform
+// Database: Supabase PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // URLs are configured in prisma.config.ts
+}
+
+// ============================================
+// USER MANAGEMENT (Clerk integration ready)
+// ============================================
+
+enum UserRole {
+  COACH
+  ATHLETE
+}
+
+model User {
+  id            String    @id @default(uuid())
+  clerkUserId   String?   @unique @map("clerk_user_id") // Will be set when Clerk is integrated
+  email         String    @unique
+  fullName      String?   @map("full_name")
+  role          UserRole  @default(ATHLETE)
+  ftp           Int?      // Functional Threshold Power (watts)
+  avatarUrl     String?   @map("avatar_url")
+
+  // Coach-Athlete relationship
+  coachId       String?   @map("coach_id")
+  coach         User?     @relation("CoachAthletes", fields: [coachId], references: [id])
+  athletes      User[]    @relation("CoachAthletes")
+
+  // Related data
+  availability  AthleteAvailability[]
+  goals         Goal[]
+  trainingWeeks TrainingWeek[]        @relation("AthleteWeeks")
+  coachedWeeks  TrainingWeek[]        @relation("CoachWeeks")
+  customWorkouts Workout[]            @relation("CoachWorkouts")
+
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+// ============================================
+// WORKOUT LIBRARY
+// ============================================
+
+model WorkoutCategory {
+  id          String    @id @default(uuid())
+  slug        String    @unique
+  name        String
+  description String?
+  sortOrder   Int       @default(0) @map("sort_order")
+
+  workouts    Workout[]
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@map("workout_categories")
+}
+
+enum DurationCategory {
+  SHORT  // < 1 hour
+  MEDIUM // 1-2 hours
+  LONG   // > 2 hours
+}
+
+enum Environment {
+  INDOOR
+  OUTDOOR
+  ANY
+}
+
+enum Intensity {
+  EASY
+  MODERATE
+  HARD
+  VERY_HARD
+}
+
+model Workout {
+  id                String           @id @default(uuid())
+  slug              String           @unique
+  name              String
+  title             String?          // Original title from source
+  description       String?
+
+  // Metadata
+  durationSeconds   Int              @map("duration_seconds")
+  durationCategory  DurationCategory @map("duration_category")
+  tssPlanned        Float?           @map("tss_planned")
+  ifPlanned         Float?           @map("if_planned") // 0.00 - 1.50
+  workoutType       String           @default("Bike") @map("workout_type")
+
+  // Filtering tags
+  environment       Environment      @default(ANY)
+  intensity         Intensity?
+
+  // The workout structure (stored as JSON)
+  structure         Json             // The nested structure for visualizer
+  rawJson           Json?            @map("raw_json") // Full original JSON
+
+  // Category
+  categoryId        String           @map("category_id")
+  category          WorkoutCategory  @relation(fields: [categoryId], references: [id])
+
+  // Ownership (null = global/system library)
+  coachId           String?          @map("coach_id")
+  coach             User?            @relation("CoachWorkouts", fields: [coachId], references: [id])
+  isPublic          Boolean          @default(true) @map("is_public")
+
+  // Scheduled instances
+  scheduledWorkouts ScheduledWorkout[]
+
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+
+  @@index([categoryId])
+  @@index([durationCategory])
+  @@index([environment])
+  @@index([coachId])
+  @@map("workouts")
+}
+
+// ============================================
+// TRAINING CALENDAR
+// ============================================
+
+model TrainingWeek {
+  id          String              @id @default(uuid())
+  weekStart   DateTime            @map("week_start") // Always a Monday
+  notes       String?
+
+  // Relationships
+  athleteId   String              @map("athlete_id")
+  athlete     User                @relation("AthleteWeeks", fields: [athleteId], references: [id])
+
+  coachId     String?             @map("coach_id")
+  coach       User?               @relation("CoachWeeks", fields: [coachId], references: [id])
+
+  scheduledWorkouts ScheduledWorkout[]
+
+  createdAt   DateTime            @default(now()) @map("created_at")
+  updatedAt   DateTime            @updatedAt @map("updated_at")
+
+  @@unique([athleteId, weekStart])
+  @@index([athleteId])
+  @@map("training_weeks")
+}
+
+model ScheduledWorkout {
+  id              String        @id @default(uuid())
+  dayIndex        Int           @map("day_index") // 0 = Monday, 6 = Sunday
+  sortOrder       Int           @default(0) @map("sort_order") // For multiple workouts per day
+  notes           String?
+  completed       Boolean       @default(false)
+  completedAt     DateTime?     @map("completed_at")
+
+  // Relationships
+  trainingWeekId  String        @map("training_week_id")
+  trainingWeek    TrainingWeek  @relation(fields: [trainingWeekId], references: [id], onDelete: Cascade)
+
+  workoutId       String        @map("workout_id")
+  workout         Workout       @relation(fields: [workoutId], references: [id])
+
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  @@index([trainingWeekId, dayIndex])
+  @@map("scheduled_workouts")
+}
+
+// ============================================
+// ATHLETE PROFILE
+// ============================================
+
+enum TimeSlot {
+  MORNING
+  AFTERNOON
+  EVENING
+}
+
+model AthleteAvailability {
+  id          String      @id @default(uuid())
+  dayIndex    Int         @map("day_index") // 0 = Monday, 6 = Sunday
+  available   Boolean     @default(true)
+  timeSlots   TimeSlot[]  @map("time_slots")
+  maxHours    Float?      @map("max_hours") // e.g., 2.5 hours
+  notes       String?
+
+  // Relationships
+  athleteId   String      @map("athlete_id")
+  athlete     User        @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  @@unique([athleteId, dayIndex])
+  @@map("athlete_availability")
+}
+
+enum GoalPriority {
+  A
+  B
+  C
+}
+
+model Goal {
+  id              String        @id @default(uuid())
+  name            String
+  eventDate       DateTime?     @map("event_date")
+  priority        GoalPriority  @default(B)
+  eventType       String?       @map("event_type") // 'Gran Fondo', 'Time Trial', etc.
+  targetDuration  String?       @map("target_duration") // '4 hours', '40km', etc.
+  notes           String?
+
+  // Relationships
+  athleteId       String        @map("athlete_id")
+  athlete         User          @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  @@index([athleteId])
+  @@map("goals")
+}
