@@ -1,6 +1,9 @@
 {
   "name": "ridepro-api",
   "version": "0.0.1",
+  "engines": {
+    "node": ">=18.0.0 <24.0.0"
+  },
   "description": "",
   "author": "",
   "private": true,
