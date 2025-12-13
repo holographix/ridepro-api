@@ -8,9 +8,11 @@ import {
   Param,
   Query,
 } from '@nestjs/common';
+import { Public } from '../auth/public.decorator';
 import { GoalsService } from './goals.service';
 import { GoalPriority } from '@prisma/client';
 
+@Public()
 @Controller('api/goals')
 export class GoalsController {
   constructor(private readonly goalsService: GoalsService) {}

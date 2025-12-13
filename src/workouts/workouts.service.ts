@@ -12,10 +12,17 @@ export class WorkoutsService {
     intensity?: string;
     durationCategory?: string;
     search?: string;
+    coachId?: string;
   }) {
-    const where: Prisma.WorkoutWhereInput = {
-      isPublic: true,
-    };
+    const where: Prisma.WorkoutWhereInput = {};
+
+    // If coachId is provided, fetch coach's workouts (including private ones)
+    // Otherwise, only fetch public workouts
+    if (params?.coachId) {
+      where.coachId = params.coachId;
+    } else {
+      where.isPublic = true;
+    }
 
     if (params?.categoryId) {
       where.categoryId = params.categoryId;

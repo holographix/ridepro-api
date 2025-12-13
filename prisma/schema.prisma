@@ -14,9 +14,61 @@ datasource db {
 // USER MANAGEMENT (Clerk integration ready)
 // ============================================
 
-enum UserRole {
-  COACH
-  ATHLETE
+enum Sex {
+  MALE
+  FEMALE
+}
+
+enum AthleteCategory {
+  AMATORE
+  JUNIORES
+  U23
+  ELITE
+  PRO
+}
+
+enum TerrainType {
+  HILLS     // 10-15min climbs
+  FLAT      // Pianura
+  MOUNTAINS // 1h+ climbs
+}
+
+enum DisciplineType {
+  MTB
+  GRAVEL_CICLOCROSS
+  ROAD
+}
+
+enum DisciplineSubType {
+  // MTB sub-types
+  MTB_XC_90MIN
+  MTB_GF_MARATHON_3H
+  MTB_NO_RACE
+  // Gravel/Ciclocross sub-types
+  GRAVEL_RACE_1H
+  GRAVEL_RACE_2H
+  GRAVEL_ULTRA_6H
+  GRAVEL_NO_RACE
+  // Road sub-types
+  ROAD_CIRCUITS_1H
+  ROAD_GRAN_FONDO_2H
+  ROAD_ULTRA_6H
+  ROAD_NO_RACE
+}
+
+enum ActivityType {
+  OUTDOOR_CYCLING
+  INDOOR_CYCLING
+  WORKOUT_HOME
+  WORKOUT_GYM
+  CROSS_RUNNING
+  CROSS_SWIMMING
+  CROSS_SKIING
+}
+
+enum AssessmentType {
+  SPRINT_12MIN    // 15" sprint + 12' climb protocol
+  POWER_1_2_5MIN  // 1'/2'/5' efforts protocol
 }
 
 model User {
@@ -24,26 +76,191 @@ model User {
   clerkUserId   String?   @unique @map("clerk_user_id") // Will be set when Clerk is integrated
   email         String    @unique
   fullName      String?   @map("full_name")
-  role          UserRole  @default(ATHLETE)
   ftp           Int?      // Functional Threshold Power (watts)
   avatarUrl     String?   @map("avatar_url")
 
-  // Coach-Athlete relationship
-  coachId       String?   @map("coach_id")
-  coach         User?     @relation("CoachAthletes", fields: [coachId], references: [id])
-  athletes      User[]    @relation("CoachAthletes")
+  // General availability notes (athlete can explain their typical schedule)
+  availabilityNotes String? @map("availability_notes")
+
+  // ============================================
+  // ONBOARDING - Personal Info
+  // ============================================
+  birthday          DateTime?       @db.Date
+  sex               Sex?
+  lastMenstrualDate DateTime?       @map("last_menstrual_date") @db.Date
+
+  // ============================================
+  // ONBOARDING - Physical
+  // ============================================
+  heightCm          Float?          @map("height_cm")
+  weightKg          Float?          @map("weight_kg")
+
+  // ============================================
+  // ONBOARDING - Profile
+  // ============================================
+  athleteCategory   AthleteCategory? @map("athlete_category")
+  terrain           TerrainType?
+
+  // ============================================
+  // ONBOARDING - Equipment
+  // ============================================
+  hasPowerMeter     Boolean         @default(false) @map("has_power_meter")
+  hasHRMonitor      Boolean         @default(false) @map("has_hr_monitor")
+
+  // ============================================
+  // ONBOARDING - Status
+  // ============================================
+  onboardingCompleted Boolean       @default(false) @map("onboarding_completed")
+  onboardingStep      Int?          @map("onboarding_step")
+
+  // ============================================
+  // TOUR & SETUP CHECKLIST
+  // Track whether user has completed guided tour and setup tasks
+  // ============================================
+  tourCompleted       Boolean       @default(false) @map("tour_completed")
+  tourDismissed       Boolean       @default(false) @map("tour_dismissed")
+  // Setup checklist items (JSON array of completed task IDs)
+  // e.g., ["profile", "availability", "goals", "assessment"]
+  setupChecklistCompleted String[]  @default([]) @map("setup_checklist_completed")
+
+  // Coach-Athlete relationships (many-to-many)
+  // A user can be both a coach AND an athlete simultaneously
+  coachingRelationships  CoachAthleteRelationship[] @relation("CoachRelationships")
+  athleteRelationships   CoachAthleteRelationship[] @relation("AthleteRelationships")
+  inviteCodes            CoachInviteCode[]
+  sentInvitations        EmailInvitation[] @relation("SentInvitations")
+  receivedInvitations    EmailInvitation[] @relation("ReceivedInvitations")
 
   // Related data
-  availability  AthleteAvailability[]
-  goals         Goal[]
-  trainingWeeks TrainingWeek[]        @relation("AthleteWeeks")
-  coachedWeeks  TrainingWeek[]        @relation("CoachWeeks")
-  customWorkouts Workout[]            @relation("CoachWorkouts")
+  availability     AthleteAvailability[]
+  unavailableDates UnavailableDate[]
+  goals            Goal[]
+  trainingWeeks    TrainingWeek[]        @relation("AthleteWeeks")
+  coachedWeeks     TrainingWeek[]        @relation("CoachWeeks")
+  customWorkouts   Workout[]             @relation("CoachWorkouts")
+  customCategories WorkoutCategory[]     @relation("CoachCategories")
+
+  // Onboarding & Assessment relations
+  disciplines       AthleteDiscipline[]
+  activityTypes     AthleteActivityType[]
+  assessments       Assessment[]
 
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
 
   @@map("users")
+}
+
+// ============================================
+// COACH-ATHLETE RELATIONSHIPS
+// Many-to-many: Users can be coaches to multiple athletes
+// and athletes can have multiple coaches
+// ============================================
+
+enum RelationshipStatus {
+  PENDING   // Invitation sent, awaiting acceptance
+  ACTIVE    // Active coaching relationship
+  PAUSED    // Temporarily paused (e.g., off-season)
+  ENDED     // Relationship ended
+}
+
+model CoachAthleteRelationship {
+  id          String             @id @default(uuid())
+
+  coachId     String             @map("coach_id")
+  coach       User               @relation("CoachRelationships", fields: [coachId], references: [id], onDelete: Cascade)
+
+  athleteId   String             @map("athlete_id")
+  athlete     User               @relation("AthleteRelationships", fields: [athleteId], references: [id], onDelete: Cascade)
+
+  status      RelationshipStatus @default(PENDING)
+
+  // Optional metadata
+  notes       String?            // Coach's private notes about this athlete
+  startedAt   DateTime?          @map("started_at")  // When relationship became active
+  endedAt     DateTime?          @map("ended_at")    // When relationship ended
+
+  createdAt   DateTime           @default(now()) @map("created_at")
+  updatedAt   DateTime           @updatedAt @map("updated_at")
+
+  // A coach can only have one relationship with each athlete
+  @@unique([coachId, athleteId])
+  @@index([coachId])
+  @@index([athleteId])
+  @@index([status])
+  @@map("coach_athlete_relationships")
+}
+
+// Invitation codes for easy athlete onboarding
+// Coach generates a code, athlete uses it to connect
+model CoachInviteCode {
+  id          String    @id @default(uuid())
+  code        String    @unique // e.g., "COACH-ABC123"
+
+  coachId     String    @map("coach_id")
+  coach       User      @relation(fields: [coachId], references: [id], onDelete: Cascade)
+
+  // Limits
+  maxUses     Int?      @map("max_uses")     // null = unlimited
+  usedCount   Int       @default(0) @map("used_count")
+  expiresAt   DateTime? @map("expires_at")   // null = never expires
+
+  isActive    Boolean   @default(true) @map("is_active")
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([coachId])
+  @@index([code])
+  @@map("coach_invite_codes")
+}
+
+// ============================================
+// EMAIL INVITATIONS
+// Coach sends email invitation to athlete
+// ============================================
+
+enum InvitationStatus {
+  PENDING     // Email sent, awaiting action
+  ACCEPTED    // Athlete accepted the invitation
+  DECLINED    // Athlete declined the invitation
+  EXPIRED     // Invitation expired
+  CANCELLED   // Coach cancelled the invitation
+}
+
+model EmailInvitation {
+  id              String            @id @default(uuid())
+  token           String            @unique // Secure token for invitation link (our internal token)
+  clerkInvitationId String?         @unique @map("clerk_invitation_id") // Clerk's invitation ID
+
+  // Coach who sent the invitation
+  coachId         String            @map("coach_id")
+  coach           User              @relation("SentInvitations", fields: [coachId], references: [id], onDelete: Cascade)
+
+  // Invited athlete info
+  athleteEmail    String            @map("athlete_email")
+  athleteName     String?           @map("athlete_name")
+
+  // If athlete already exists, link to their user record
+  existingUserId  String?           @map("existing_user_id")
+  existingUser    User?             @relation("ReceivedInvitations", fields: [existingUserId], references: [id])
+
+  // Status tracking
+  status          InvitationStatus  @default(PENDING)
+  personalMessage String?           @map("personal_message") // Optional message from coach
+
+  // Timing
+  expiresAt       DateTime          @map("expires_at")
+  sentAt          DateTime          @default(now()) @map("sent_at")
+  acceptedAt      DateTime?         @map("accepted_at")
+
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+
+  @@index([coachId])
+  @@index([athleteEmail])
+  @@index([token])
+  @@index([status])
+  @@map("email_invitations")
 }
 
 // ============================================
@@ -57,10 +274,15 @@ model WorkoutCategory {
   description String?
   sortOrder   Int       @default(0) @map("sort_order")
 
+  // Ownership (null = global/system category)
+  coachId     String?   @map("coach_id")
+  coach       User?     @relation("CoachCategories", fields: [coachId], references: [id])
+
   workouts    Workout[]
 
   createdAt   DateTime  @default(now()) @map("created_at")
 
+  @@index([coachId])
   @@map("workout_categories")
 }
 
@@ -95,7 +317,8 @@ model Workout {
   durationCategory  DurationCategory @map("duration_category")
   tssPlanned        Float?           @map("tss_planned")
   ifPlanned         Float?           @map("if_planned") // 0.00 - 1.50
-  workoutType       String           @default("Bike") @map("workout_type")
+  // Workout type for UI display (outdoorCycling, indoorCycling, gymHome, gymFacility, crossTraining, other)
+  workoutType       String           @default("outdoorCycling") @map("workout_type")
 
   // Filtering tags
   environment       Environment      @default(ANY)
@@ -153,13 +376,34 @@ model TrainingWeek {
   @@map("training_weeks")
 }
 
+// How athlete felt after workout
+enum WorkoutFeeling {
+  GREAT
+  GOOD
+  OK
+  TIRED
+  EXHAUSTED
+}
+
 model ScheduledWorkout {
   id              String        @id @default(uuid())
   dayIndex        Int           @map("day_index") // 0 = Monday, 6 = Sunday
   sortOrder       Int           @default(0) @map("sort_order") // For multiple workouts per day
-  notes           String?
+  notes           String?       // Coach notes when scheduling
   completed       Boolean       @default(false)
   completedAt     DateTime?     @map("completed_at")
+
+  // ============================================
+  // ACTUAL RESULTS (filled by athlete after completion)
+  // ============================================
+  actualDurationSeconds Int?            @map("actual_duration_seconds")
+  actualTSS             Float?          @map("actual_tss")
+  actualIF              Float?          @map("actual_if")
+  avgPower              Int?            @map("avg_power")       // Watts
+  avgHeartRate          Int?            @map("avg_heart_rate")  // BPM
+  rpe                   Int?            // Rate of Perceived Exertion (1-10)
+  feeling               WorkoutFeeling? // How athlete felt
+  resultNotes           String?         @map("result_notes")    // Athlete's notes
 
   // Relationships
   trainingWeekId  String        @map("training_week_id")
@@ -200,6 +444,24 @@ model AthleteAvailability {
   @@map("athlete_availability")
 }
 
+// Specific dates when athlete is unavailable (vacations, travel, etc.)
+model UnavailableDate {
+  id          String    @id @default(uuid())
+  date        DateTime  @db.Date // The specific unavailable date
+  reason      String?   // Optional reason (e.g., "Vacation", "Travel")
+
+  // Relationships
+  athleteId   String    @map("athlete_id")
+  athlete     User      @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@unique([athleteId, date])
+  @@index([athleteId])
+  @@index([date])
+  @@map("unavailable_dates")
+}
+
 enum GoalPriority {
   A
   B
@@ -223,4 +485,77 @@ model Goal {
 
   @@index([athleteId])
   @@map("goals")
+}
+
+// ============================================
+// ONBOARDING - Athlete Disciplines & Activities
+// ============================================
+
+model AthleteDiscipline {
+  id          String            @id @default(uuid())
+  athleteId   String            @map("athlete_id")
+  athlete     User              @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  discipline  DisciplineType
+  subType     DisciplineSubType @map("sub_type")
+  createdAt   DateTime          @default(now()) @map("created_at")
+
+  @@unique([athleteId, discipline])
+  @@index([athleteId])
+  @@map("athlete_disciplines")
+}
+
+model AthleteActivityType {
+  id           String       @id @default(uuid())
+  athleteId    String       @map("athlete_id")
+  athlete      User         @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  activityType ActivityType @map("activity_type")
+
+  @@unique([athleteId, activityType])
+  @@index([athleteId])
+  @@map("athlete_activity_types")
+}
+
+// ============================================
+// ASSESSMENTS - Fitness Testing
+// ============================================
+
+model Assessment {
+  id              String          @id @default(uuid())
+  athleteId       String          @map("athlete_id")
+  athlete         User            @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  testType        AssessmentType  @map("test_type")
+  testDate        DateTime        @map("test_date")
+
+  // ============================================
+  // Sprint + 12min protocol
+  // PEAK = maximum power during the effort
+  // AVG = average power over the duration
+  // ============================================
+  sprintPeakPower Int?            @map("sprint_peak_power")    // Peak power during 15" sprint (W)
+  sprintMaxHR     Int?            @map("sprint_max_hr")        // Max HR during sprint (bpm)
+  climb12AvgPower Int?            @map("climb_12_avg_power")   // Avg power during 12' climb (W)
+  climb12MaxHR    Int?            @map("climb_12_max_hr")      // Max HR during 12' climb (bpm)
+
+  // ============================================
+  // 1/2/5 minute protocol
+  // All AVERAGE power over the effort duration
+  // ============================================
+  effort1minAvgPower  Int?        @map("effort_1min_avg_power")  // Avg power during 1' effort (W)
+  effort1minMaxHR     Int?        @map("effort_1min_max_hr")     // Max HR during 1' effort (bpm)
+  effort2minAvgPower  Int?        @map("effort_2min_avg_power")  // Avg power during 2' effort (W)
+  effort2minMaxHR     Int?        @map("effort_2min_max_hr")     // Max HR during 2' effort (bpm)
+  effort5minAvgPower  Int?        @map("effort_5min_avg_power")  // Avg power during 5' effort (W)
+  effort5minMaxHR     Int?        @map("effort_5min_max_hr")     // Max HR during 5' effort (bpm)
+
+  // Calculated/estimated values
+  estimatedFTP    Int?            @map("estimated_ftp")
+  notes           String?
+
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+
+  @@index([athleteId])
+  @@index([testDate])
+  @@map("assessments")
 }

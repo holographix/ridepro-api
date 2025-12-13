@@ -24,6 +24,7 @@ export class WorkoutsController {
     @Query('intensity') intensity?: string,
     @Query('durationCategory') durationCategory?: string,
     @Query('search') search?: string,
+    @Query('coachId') coachId?: string,
   ) {
     return this.workoutsService.findAll({
       categoryId,
@@ -31,6 +32,7 @@ export class WorkoutsController {
       intensity,
       durationCategory,
       search,
+      coachId,
     });
   }
 

@@ -8,8 +8,10 @@ import {
   Param,
   Query,
 } from '@nestjs/common';
+import { Public } from '../auth/public.decorator';
 import { CalendarService } from './calendar.service';
 
+@Public()
 @Controller('api/calendar')
 export class CalendarController {
   constructor(private readonly calendarService: CalendarService) {}
@@ -128,5 +130,82 @@ export class CalendarController {
       parseInt(dayIndex),
       data.workoutIds,
     );
+  }
+
+  // Athlete Stats for Coach Dashboard
+  @Get('stats/athletes')
+  getAthleteStats(
+    @Query('athleteIds') athleteIds: string,
+    @Query('weekStart') weekStart: string,
+  ) {
+    const ids = athleteIds.split(',').filter((id) => id.trim());
+    return this.calendarService.getAthleteStats(ids, new Date(weekStart));
+  }
+
+  // Coach Dashboard - aggregated stats for all athletes (MUST be before coach/:coachId for route matching)
+  @Get('coach/:coachId/dashboard')
+  getCoachDashboard(
+    @Param('coachId') coachId: string,
+    @Query('weekStart') weekStart: string,
+  ) {
+    return this.calendarService.getCoachDashboard(coachId, new Date(weekStart));
+  }
+
+  // Coach Calendar - aggregated view of all athletes' workouts
+  @Get('coach/:coachId')
+  getCoachCalendar(
+    @Param('coachId') coachId: string,
+    @Query('start') start: string,
+    @Query('end') end: string,
+    @Query('athleteIds') athleteIds?: string,
+  ) {
+    const filterAthleteIds = athleteIds
+      ? athleteIds.split(',').filter((id) => id.trim())
+      : undefined;
+    return this.calendarService.getCoachCalendar(
+      coachId,
+      new Date(start),
+      new Date(end),
+      filterAthleteIds,
+    );
+  }
+
+  // Athlete Calendar - athlete's own view of their workouts
+  @Get('athlete/:athleteId')
+  getAthleteCalendar(
+    @Param('athleteId') athleteId: string,
+    @Query('start') start: string,
+    @Query('end') end: string,
+  ) {
+    return this.calendarService.getAthleteCalendar(
+      athleteId,
+      new Date(start),
+      new Date(end),
+    );
+  }
+
+  // Get single scheduled workout (for detail view)
+  @Get('scheduled/:id')
+  getScheduledWorkout(@Param('id') id: string) {
+    return this.calendarService.getScheduledWorkout(id);
+  }
+
+  // Submit workout results (athlete completion with actual data)
+  @Put('scheduled/:id/results')
+  submitWorkoutResults(
+    @Param('id') id: string,
+    @Body()
+    data: {
+      actualDurationSeconds?: number;
+      actualTSS?: number;
+      actualIF?: number;
+      avgPower?: number;
+      avgHeartRate?: number;
+      rpe?: number;
+      feeling?: 'GREAT' | 'GOOD' | 'OK' | 'TIRED' | 'EXHAUSTED';
+      resultNotes?: string;
+    },
+  ) {
+    return this.calendarService.submitWorkoutResults(id, data);
   }
 }
