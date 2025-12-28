@@ -1,52 +1,289 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { AssessmentType } from '@prisma/client';
+import { AssessmentStatus } from '@prisma/client';
 
-// DTO interfaces for assessment data
-export interface Sprint12MinData {
-  testDate: Date;
-  sprintPeakPower?: number;   // Peak power during 15" sprint (W)
-  sprintMaxHR?: number;       // Max HR during sprint (bpm)
-  climb12AvgPower?: number;   // Average power during 12' climb (W)
-  climb12MaxHR?: number;      // Max HR during 12' climb (bpm)
+// ============================================
+// 2-DAY ASSESSMENT PROTOCOL
+// Day 1: 1'/2'/5' efforts on 6-7% gradient
+// Day 2: 5" sprint + 12' climb on 6-7% gradient
+// Athletes have 15 days to complete Day 2 after Day 1
+// ============================================
+
+// DTO interfaces for Day 1 data (1'/2'/5' efforts)
+export interface Day1Data {
+  effort1minAvgPower?: number;
+  effort1minMaxHR?: number;
+  effort2minAvgPower?: number;
+  effort2minMaxHR?: number;
+  effort5minAvgPower?: number;
+  effort5minMaxHR?: number;
   notes?: string;
 }
 
-export interface Power125MinData {
-  testDate: Date;
-  effort1minAvgPower?: number;  // Average power during 1' effort (W)
-  effort1minMaxHR?: number;     // Max HR during 1' effort (bpm)
-  effort2minAvgPower?: number;  // Average power during 2' effort (W)
-  effort2minMaxHR?: number;     // Max HR during 2' effort (bpm)
-  effort5minAvgPower?: number;  // Average power during 5' effort (W)
-  effort5minMaxHR?: number;     // Max HR during 5' effort (bpm)
+// DTO interfaces for Day 2 data (5" sprint + 12' climb)
+export interface Day2Data {
+  sprint5secPeakPower?: number;
+  sprint5secMaxHR?: number;
+  climb12minAvgPower?: number;
+  climb12minMaxHR?: number;
   notes?: string;
 }
+
+const DAYS_TO_EXPIRE = 15; // Days allowed to complete Day 2 after Day 1
 
 @Injectable()
 export class AssessmentsService {
   constructor(private prisma: PrismaService) {}
 
   /**
-   * Get all assessments for an athlete
+   * Start a new 2-day assessment test
+   * Creates assessment with status DAY1_PENDING
+   */
+  async startTest(athleteId: string) {
+    // Check if athlete already has an ongoing test
+    const ongoing = await this.getOngoingTest(athleteId);
+    if (ongoing) {
+      throw new BadRequestException(
+        `You already have an ongoing assessment test. Complete or cancel it before starting a new one.`
+      );
+    }
+
+    const assessment = await this.prisma.assessment.create({
+      data: {
+        athleteId,
+        testStatus: AssessmentStatus.DAY1_PENDING,
+      },
+    });
+
+    return assessment;
+  }
+
+  /**
+   * Complete Day 1 of the assessment (1'/2'/5' efforts)
+   * Transitions from DAY1_PENDING → DAY1_COMPLETED
+   * Sets expiration date (15 days from now)
+   */
+  async completeDay1(id: string, data: Day1Data) {
+    const assessment = await this.prisma.assessment.findUnique({
+      where: { id },
+    });
+
+    if (!assessment) {
+      throw new NotFoundException('Assessment not found');
+    }
+
+    if (assessment.testStatus !== AssessmentStatus.DAY1_PENDING) {
+      throw new BadRequestException(
+        `Cannot complete Day 1. Current status: ${assessment.testStatus}`
+      );
+    }
+
+    const now = new Date();
+    const expiresAt = new Date(now);
+    expiresAt.setDate(expiresAt.getDate() + DAYS_TO_EXPIRE);
+
+    const updated = await this.prisma.assessment.update({
+      where: { id },
+      data: {
+        testStatus: AssessmentStatus.DAY1_COMPLETED,
+        day1CompletedAt: now,
+        expiresAt,
+        effort1minAvgPower: data.effort1minAvgPower,
+        effort1minMaxHR: data.effort1minMaxHR,
+        effort2minAvgPower: data.effort2minAvgPower,
+        effort2minMaxHR: data.effort2minMaxHR,
+        effort5minAvgPower: data.effort5minAvgPower,
+        effort5minMaxHR: data.effort5minMaxHR,
+        notes: data.notes,
+      },
+    });
+
+    return updated;
+  }
+
+  /**
+   * Start Day 2 of the assessment
+   * Validates Day 1 is complete and test hasn't expired
+   * Transitions from DAY1_COMPLETED → DAY2_PENDING
+   */
+  async startDay2(id: string) {
+    const assessment = await this.prisma.assessment.findUnique({
+      where: { id },
+    });
+
+    if (!assessment) {
+      throw new NotFoundException('Assessment not found');
+    }
+
+    // Check if expired
+    if (assessment.expiresAt && new Date() > assessment.expiresAt) {
+      // Mark as expired
+      await this.prisma.assessment.update({
+        where: { id },
+        data: { testStatus: AssessmentStatus.EXPIRED },
+      });
+      throw new BadRequestException(
+        'This assessment test has expired. Please start a new test.'
+      );
+    }
+
+    if (assessment.testStatus !== AssessmentStatus.DAY1_COMPLETED) {
+      throw new BadRequestException(
+        `Cannot start Day 2. Current status: ${assessment.testStatus}`
+      );
+    }
+
+    const updated = await this.prisma.assessment.update({
+      where: { id },
+      data: {
+        testStatus: AssessmentStatus.DAY2_PENDING,
+      },
+    });
+
+    return updated;
+  }
+
+  /**
+   * Complete Day 2 of the assessment (5" sprint + 12' climb)
+   * Transitions from DAY2_PENDING → COMPLETED
+   * Calculates FTP and maxHR
+   * Auto-updates athlete's profile
+   */
+  async completeDay2(id: string, data: Day2Data) {
+    const assessment = await this.prisma.assessment.findUnique({
+      where: { id },
+    });
+
+    if (!assessment) {
+      throw new NotFoundException('Assessment not found');
+    }
+
+    if (assessment.testStatus !== AssessmentStatus.DAY2_PENDING) {
+      throw new BadRequestException(
+        `Cannot complete Day 2. Current status: ${assessment.testStatus}`
+      );
+    }
+
+    // Calculate FTP from 12' climb power using power profile ratio
+    // Formula from coach's Excel: ratio = P1'/P12', then apply multiplier based on ratio
+    let estimatedFTP: number | null = null;
+
+    if (data.climb12minAvgPower && assessment.effort1minAvgPower) {
+      // Calculate power ratio P1'/P12' rounded to 2 decimals
+      const powerRatio = Math.floor((assessment.effort1minAvgPower / data.climb12minAvgPower) * 100) / 100;
+
+      let ftpMultiplier: number;
+      if (powerRatio < 1.6) {
+        // Endurance profile: 1-min power close to 12-min power
+        ftpMultiplier = 0.94;
+      } else if (powerRatio > 1.9) {
+        // Sprint profile: strong 1-min but lower sustained power
+        ftpMultiplier = 0.90;
+      } else {
+        // Balanced profile
+        ftpMultiplier = 0.92;
+      }
+
+      estimatedFTP = Math.round(data.climb12minAvgPower * ftpMultiplier);
+    } else if (data.climb12minAvgPower) {
+      // Fallback if P1' is missing: use default 0.92 multiplier
+      estimatedFTP = Math.round(data.climb12minAvgPower * 0.92);
+    }
+
+    // Find max HR from all efforts (across both days)
+    const allHRValues = [
+      assessment.effort1minMaxHR,
+      assessment.effort2minMaxHR,
+      assessment.effort5minMaxHR,
+      data.sprint5secMaxHR,
+      data.climb12minMaxHR,
+    ].filter((hr): hr is number => hr !== null && hr !== undefined);
+
+    const maxHR = allHRValues.length > 0 ? Math.max(...allHRValues) : null;
+
+    const now = new Date();
+    const updated = await this.prisma.assessment.update({
+      where: { id },
+      data: {
+        testStatus: AssessmentStatus.COMPLETED,
+        day2CompletedAt: now,
+        sprint5secPeakPower: data.sprint5secPeakPower,
+        sprint5secMaxHR: data.sprint5secMaxHR,
+        climb12minAvgPower: data.climb12minAvgPower,
+        climb12minMaxHR: data.climb12minMaxHR,
+        estimatedFTP,
+        maxHR,
+        notes: data.notes || assessment.notes,
+      },
+    });
+
+    // Auto-update athlete's FTP and maxHR
+    await this.updateAthleteFromAssessment(
+      assessment.athleteId,
+      estimatedFTP,
+      maxHR,
+    );
+
+    return updated;
+  }
+
+  /**
+   * Get ongoing test for an athlete (if any)
+   * Returns test that is not COMPLETED or EXPIRED
+   */
+  async getOngoingTest(athleteId: string) {
+    const assessment = await this.prisma.assessment.findFirst({
+      where: {
+        athleteId,
+        testStatus: {
+          in: [
+            AssessmentStatus.DAY1_PENDING,
+            AssessmentStatus.DAY1_COMPLETED,
+            AssessmentStatus.DAY2_PENDING,
+          ],
+        },
+      },
+      orderBy: { startedAt: 'desc' },
+    });
+
+    // Check if Day 1 completed assessment has expired
+    if (assessment && assessment.testStatus === AssessmentStatus.DAY1_COMPLETED) {
+      if (assessment.expiresAt && new Date() > assessment.expiresAt) {
+        // Mark as expired
+        await this.prisma.assessment.update({
+          where: { id: assessment.id },
+          data: { testStatus: AssessmentStatus.EXPIRED },
+        });
+        return null; // No ongoing test
+      }
+    }
+
+    return assessment;
+  }
+
+  /**
+   * Get all completed assessments for an athlete
    */
   async getAthleteAssessments(athleteId: string) {
     return this.prisma.assessment.findMany({
-      where: { athleteId },
-      orderBy: { testDate: 'desc' },
+      where: {
+        athleteId,
+        testStatus: AssessmentStatus.COMPLETED,
+      },
+      orderBy: { day2CompletedAt: 'desc' },
     });
   }
 
   /**
-   * Get latest assessment for an athlete (optionally by type)
+   * Get latest completed assessment for an athlete
    */
-  async getLatestAssessment(athleteId: string, testType?: AssessmentType) {
+  async getLatestAssessment(athleteId: string) {
     return this.prisma.assessment.findFirst({
       where: {
         athleteId,
-        ...(testType && { testType }),
+        testStatus: AssessmentStatus.COMPLETED,
       },
-      orderBy: { testDate: 'desc' },
+      orderBy: { day2CompletedAt: 'desc' },
     });
   }
 
@@ -65,128 +302,93 @@ export class AssessmentsService {
   }
 
   /**
-   * Create Sprint + 12min protocol assessment
-   */
-  async createSprint12MinAssessment(athleteId: string, data: Sprint12MinData) {
-    // Calculate estimated FTP from 12' climb power (approximately 95% of 12' avg power)
-    const estimatedFTP = data.climb12AvgPower
-      ? Math.round(data.climb12AvgPower * 0.95)
-      : undefined;
-
-    return this.prisma.assessment.create({
-      data: {
-        athleteId,
-        testType: 'SPRINT_12MIN',
-        testDate: data.testDate,
-        sprintPeakPower: data.sprintPeakPower,
-        sprintMaxHR: data.sprintMaxHR,
-        climb12AvgPower: data.climb12AvgPower,
-        climb12MaxHR: data.climb12MaxHR,
-        estimatedFTP,
-        notes: data.notes,
-      },
-    });
-  }
-
-  /**
-   * Create 1/2/5min protocol assessment
-   */
-  async createPower125MinAssessment(athleteId: string, data: Power125MinData) {
-    // Calculate estimated FTP from 5' avg power (approximately 90% of 5' avg power)
-    const estimatedFTP = data.effort5minAvgPower
-      ? Math.round(data.effort5minAvgPower * 0.9)
-      : undefined;
-
-    return this.prisma.assessment.create({
-      data: {
-        athleteId,
-        testType: 'POWER_1_2_5MIN',
-        testDate: data.testDate,
-        effort1minAvgPower: data.effort1minAvgPower,
-        effort1minMaxHR: data.effort1minMaxHR,
-        effort2minAvgPower: data.effort2minAvgPower,
-        effort2minMaxHR: data.effort2minMaxHR,
-        effort5minAvgPower: data.effort5minAvgPower,
-        effort5minMaxHR: data.effort5minMaxHR,
-        estimatedFTP,
-        notes: data.notes,
-      },
-    });
-  }
-
-  /**
-   * Update an assessment
-   */
-  async updateAssessment(
-    id: string,
-    data: Partial<Sprint12MinData & Power125MinData>,
-  ) {
-    const existing = await this.prisma.assessment.findUnique({
-      where: { id },
-    });
-
-    if (!existing) {
-      return null;
-    }
-
-    // Recalculate FTP based on test type
-    let estimatedFTP: number | undefined;
-    if (existing.testType === 'SPRINT_12MIN') {
-      const climb12AvgPower = data.climb12AvgPower ?? existing.climb12AvgPower;
-      estimatedFTP = climb12AvgPower
-        ? Math.round(climb12AvgPower * 0.95)
-        : undefined;
-    } else {
-      const effort5minAvgPower =
-        data.effort5minAvgPower ?? existing.effort5minAvgPower;
-      estimatedFTP = effort5minAvgPower
-        ? Math.round(effort5minAvgPower * 0.9)
-        : undefined;
-    }
-
-    return this.prisma.assessment.update({
-      where: { id },
-      data: {
-        testDate: data.testDate,
-        sprintPeakPower: data.sprintPeakPower,
-        sprintMaxHR: data.sprintMaxHR,
-        climb12AvgPower: data.climb12AvgPower,
-        climb12MaxHR: data.climb12MaxHR,
-        effort1minAvgPower: data.effort1minAvgPower,
-        effort1minMaxHR: data.effort1minMaxHR,
-        effort2minAvgPower: data.effort2minAvgPower,
-        effort2minMaxHR: data.effort2minMaxHR,
-        effort5minAvgPower: data.effort5minAvgPower,
-        effort5minMaxHR: data.effort5minMaxHR,
-        estimatedFTP,
-        notes: data.notes,
-      },
-    });
-  }
-
-  /**
    * Delete an assessment
+   * Only allowed for tests in progress (not completed)
    */
   async deleteAssessment(id: string) {
+    const assessment = await this.prisma.assessment.findUnique({
+      where: { id },
+    });
+
+    if (!assessment) {
+      throw new NotFoundException('Assessment not found');
+    }
+
+    if (assessment.testStatus === AssessmentStatus.COMPLETED) {
+      throw new BadRequestException(
+        'Cannot delete completed assessment tests'
+      );
+    }
+
     return this.prisma.assessment.delete({
       where: { id },
     });
   }
 
   /**
-   * Update athlete's FTP based on latest assessment
+   * Update athlete's FTP and maxHR from assessment data
+   * Called automatically when Day 2 is completed
    */
-  async updateAthleteFTP(athleteId: string) {
-    const latestAssessment = await this.getLatestAssessment(athleteId);
+  private async updateAthleteFromAssessment(
+    athleteId: string,
+    estimatedFTP: number | null,
+    maxHRFromTest: number | null,
+  ) {
+    const updateData: { ftp?: number; maxHR?: number } = {};
 
-    if (latestAssessment?.estimatedFTP) {
+    if (estimatedFTP) {
+      updateData.ftp = estimatedFTP;
+    }
+
+    // Only update maxHR if the new value is higher than existing
+    if (maxHRFromTest) {
+      const athlete = await this.prisma.user.findUnique({
+        where: { id: athleteId },
+        select: { maxHR: true },
+      });
+
+      // Update maxHR if it's higher than current or if current is null
+      if (!athlete?.maxHR || maxHRFromTest > athlete.maxHR) {
+        updateData.maxHR = maxHRFromTest;
+      }
+    }
+
+    if (Object.keys(updateData).length > 0) {
       await this.prisma.user.update({
         where: { id: athleteId },
-        data: { ftp: latestAssessment.estimatedFTP },
+        data: updateData,
+      });
+    }
+  }
+
+  /**
+   * Check for expired tests and mark them as EXPIRED
+   * Can be run as a background job or on-demand
+   */
+  async checkExpiredTests() {
+    const now = new Date();
+
+    const expiredTests = await this.prisma.assessment.findMany({
+      where: {
+        testStatus: AssessmentStatus.DAY1_COMPLETED,
+        expiresAt: {
+          lt: now,
+        },
+      },
+    });
+
+    if (expiredTests.length > 0) {
+      await this.prisma.assessment.updateMany({
+        where: {
+          id: { in: expiredTests.map((t) => t.id) },
+        },
+        data: {
+          testStatus: AssessmentStatus.EXPIRED,
+        },
       });
     }
 
-    return latestAssessment;
+    return { expiredCount: expiredTests.length };
   }
 
   /**
@@ -212,12 +414,12 @@ export class AssessmentsService {
             email: true,
             ftp: true,
             assessments: {
-              orderBy: { testDate: 'desc' },
+              where: { testStatus: AssessmentStatus.COMPLETED },
+              orderBy: { day2CompletedAt: 'desc' },
               take: 1,
               select: {
                 id: true,
-                testType: true,
-                testDate: true,
+                day2CompletedAt: true,
                 estimatedFTP: true,
                 createdAt: true,
               },
@@ -227,19 +429,26 @@ export class AssessmentsService {
       },
     });
 
-    const athletes = relationships.map(r => r.athlete);
+    const athletes = relationships.map((r) => r.athlete);
 
     return athletes.map((athlete) => {
       const latestAssessment = athlete.assessments[0] || null;
       const hasAssessment = !!latestAssessment;
-      const lastTestDate = latestAssessment?.testDate || null;
-      const isOverdue = !latestAssessment || new Date(latestAssessment.testDate) < thirtyDaysAgo;
+      const lastTestDate = latestAssessment?.day2CompletedAt || null;
+      const isOverdue =
+        !latestAssessment ||
+        !latestAssessment.day2CompletedAt ||
+        new Date(latestAssessment.day2CompletedAt) < thirtyDaysAgo;
       const daysSinceTest = lastTestDate
-        ? Math.floor((Date.now() - new Date(lastTestDate).getTime()) / (1000 * 60 * 60 * 24))
+        ? Math.floor(
+            (Date.now() - new Date(lastTestDate).getTime()) /
+              (1000 * 60 * 60 * 24),
+          )
         : null;
       // New assessment = created in the last 24 hours
       const isNewAssessment = latestAssessment?.createdAt
-        ? Date.now() - new Date(latestAssessment.createdAt).getTime() < 24 * 60 * 60 * 1000
+        ? Date.now() - new Date(latestAssessment.createdAt).getTime() <
+          24 * 60 * 60 * 1000
         : false;
 
       return {
@@ -255,8 +464,7 @@ export class AssessmentsService {
         latestAssessment: latestAssessment
           ? {
               id: latestAssessment.id,
-              testType: latestAssessment.testType,
-              testDate: latestAssessment.testDate,
+              day2CompletedAt: latestAssessment.day2CompletedAt,
               estimatedFTP: latestAssessment.estimatedFTP,
             }
           : null,
@@ -274,25 +482,26 @@ export class AssessmentsService {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - MONTHLY_THRESHOLD_DAYS);
 
     // Get athlete with latest assessment
-    const athlete = await this.prisma.user.findUnique({
+    let athlete = await this.prisma.user.findUnique({
       where: { id: athleteId },
       select: {
         id: true,
         fullName: true,
         email: true,
         ftp: true,
+        maxHR: true,
         heightCm: true,
         weightKg: true,
         assessments: {
-          orderBy: { testDate: 'desc' },
+          where: { testStatus: AssessmentStatus.COMPLETED },
+          orderBy: { day2CompletedAt: 'desc' },
           take: 5,
           select: {
             id: true,
-            testType: true,
-            testDate: true,
+            day2CompletedAt: true,
             estimatedFTP: true,
-            sprintPeakPower: true,
-            climb12AvgPower: true,
+            sprint5secPeakPower: true,
+            climb12minAvgPower: true,
             effort5minAvgPower: true,
             createdAt: true,
           },
@@ -314,13 +523,20 @@ export class AssessmentsService {
     }
 
     // Calculate W/kg if we have weight
-    const wattsPerKg = athlete.weightKg && latestAssessment?.estimatedFTP
-      ? latestAssessment.estimatedFTP / athlete.weightKg
-      : null;
+    const wattsPerKg =
+      athlete.weightKg && latestAssessment?.estimatedFTP
+        ? latestAssessment.estimatedFTP / athlete.weightKg
+        : null;
 
-    const isOverdue = !latestAssessment || new Date(latestAssessment.testDate) < thirtyDaysAgo;
-    const daysSinceTest = latestAssessment?.testDate
-      ? Math.floor((Date.now() - new Date(latestAssessment.testDate).getTime()) / (1000 * 60 * 60 * 24))
+    const isOverdue =
+      !latestAssessment ||
+      !latestAssessment.day2CompletedAt ||
+      new Date(latestAssessment.day2CompletedAt) < thirtyDaysAgo;
+    const daysSinceTest = latestAssessment?.day2CompletedAt
+      ? Math.floor(
+          (Date.now() - new Date(latestAssessment.day2CompletedAt).getTime()) /
+            (1000 * 60 * 60 * 24),
+        )
       : null;
 
     return {
@@ -340,7 +556,11 @@ export class AssessmentsService {
         previousAssessment,
         ftpProgress,
         wattsPerKg: wattsPerKg ? parseFloat(wattsPerKg.toFixed(2)) : null,
-        assessmentHistory: athlete.assessments,
+        assessmentHistory: athlete.assessments.map((a) => ({
+          id: a.id,
+          testDate: a.day2CompletedAt, // Use day2CompletedAt as the test completion date
+          estimatedFTP: a.estimatedFTP,
+        })),
       },
     };
   }

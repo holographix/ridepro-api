@@ -73,6 +73,7 @@ src/
 ├── email/               # Email service (Resend)
 ├── onboarding/          # Athlete onboarding (7-step wizard)
 ├── assessments/         # Fitness assessment tests
+├── workout-parsers/     # Workout file parsers (ZWO, ERG, MRC)
 ├── app.module.ts        # Root module
 └── main.ts              # Entry point
 
@@ -209,31 +210,93 @@ prisma.config.ts         # Prisma configuration (URLs)
 7. Activities: activityTypes[], hasPowerMeter, hasHRMonitor
 
 ### Assessments (`/api/assessments`)
-- `GET /athlete/:athleteId` - Get all athlete assessments
-- `GET /athlete/:athleteId/latest` - Get latest assessment
+
+**2-Day Assessment Protocol:**
+Day 1: 1'/2'/5' efforts on 6-7% gradient
+Day 2: 5" sprint + 12' climb on 6-7% gradient
+Athletes have 15 days to complete Day 2 after Day 1
+
+**Workflow Endpoints:**
+- `POST /start` - Start new 2-day assessment (creates DAY1_PENDING)
+- `POST /:id/complete-day1` - Complete Day 1 (transitions to DAY1_COMPLETED, sets 15-day expiration)
+- `POST /:id/start-day2` - Start Day 2 (validates Day 1 complete, transitions to DAY2_PENDING)
+- `POST /:id/complete-day2` - Complete Day 2 (calculates FTP & maxHR, auto-updates athlete, transitions to COMPLETED)
+- `GET /athlete/:athleteId/ongoing` - Get ongoing test (returns null if no active test)
+- `POST /check-expired` - Check and mark expired tests (background job)
+
+**Query Endpoints:**
+- `GET /athlete/:athleteId` - Get all completed assessments
+- `GET /athlete/:athleteId/latest` - Get latest completed assessment
 - `GET /athlete/:athleteId/stats` - Get athlete stats with assessment data (for AthleteStatsPage)
 - `GET /coach/:coachId/status` - Get assessment status for all athletes of a coach
 - `GET /:id` - Get assessment by ID
-- `POST /sprint-12min` - Create Sprint + 12min assessment
-- `POST /power-125min` - Create Power 1/2/5min assessment
-- `POST /athlete/:athleteId/update-ftp` - Update athlete's FTP from latest assessment
-- `PUT /:id` - Update assessment
-- `DELETE /:id` - Delete assessment
 
-**Assessment Types:**
-- `SPRINT_12MIN`: 15" sprint (PEAK power) + 12' climb (AVERAGE power)
-- `POWER_1_2_5MIN`: 1'/2'/5' efforts (all AVERAGE power)
+**Management:**
+- `DELETE /:id` - Delete assessment (only allowed for in-progress tests, not completed)
 
-**Sprint + 12min Protocol Fields:**
-- sprintPeakPower (PEAK power during 15" sprint)
-- sprintMaxHR
-- climb12AvgPower (AVERAGE power during 12' climb)
-- climb12MaxHR
+### Zones (`/api/zones`)
+- `GET /:athleteId` - Get all zones (power + HR) with calculated values based on FTP/maxHR
+- `GET /:athleteId/power` - Get power zones configuration
+- `PUT /:athleteId/power` - Update power zones (zoneSystem, zone1Max..zone6Max)
+- `GET /:athleteId/hr` - Get HR zones configuration
+- `PUT /:athleteId/hr` - Update HR zones (zoneSystem, zone1Max..zone5Max)
+- `PUT /:athleteId/data` - Update athlete's FTP, maxHR, restingHR
+- `POST /calculate/power` - Calculate power zones from FTP (without saving)
+- `POST /calculate/hr` - Calculate HR zones from maxHR (without saving)
 
-**Power 1/2/5min Protocol Fields:**
+**Zone Systems:**
+- Power: `COGGAN` (default), `POLARIZED`, `CUSTOM`
+- HR: `STANDARD` (default), `KARVONEN`, `CUSTOM`
+
+**Coach's Zone Formulas (from "Calcolo zone.xlsx"):**
+- FC Soglia (Threshold HR) = 93% of Max HR
+- HR zones calculated as % of FC Soglia
+- 6 Power zones (% of FTP): Z1 0-55%, Z2 55-75%, Z3 75-90%, Z4 90-105%, Z5 105-120%, Z6 120-150%
+- 5 HR zones (% of FC Soglia): Z1 <68%, Z2 68-83%, Z3 83-94%, Z4 94-105%, Z5 105-120%
+
+**Auto-update on Assessment:**
+- When a new assessment is created, athlete's FTP is auto-updated from estimatedFTP
+- MaxHR is auto-updated if test result is higher than current value (takes max from all HR measurements)
+- When fetching athlete stats (`/athlete/:athleteId/stats`), if athlete has no maxHR but has assessments with HR data, maxHR is automatically calculated and updated (fixes old assessments created before auto-update feature)
+
+### Workout Parsers (`/api/workout-parsers`)
+- `GET /formats` - Get list of supported file formats
+- `POST /parse` - Parse workout from text content (body: { content, filename })
+- `POST /convert` - Parse and convert to RidePro format (body: { content, filename, name?, description? })
+- `POST /upload` - Upload and parse a workout file (multipart form: file)
+- `POST /upload-and-convert` - Upload, parse, and convert in one step (multipart form: file + name?, description?)
+
+**Supported Formats:**
+- `.zwo` - Zwift workout files (XML format, power as % FTP decimals like 0.75)
+- `.erg` - ERG files (absolute watts at time points, includes FTP for conversion)
+- `.mrc` - MRC files (FTP percentage at time points)
+
+**Parsed Segment Structure:**
+- `startTime`, `endTime`, `duration` - Time in seconds
+- `powerMin`, `powerMax` - Power as % of FTP
+- `intensityClass` - warmUp, active, rest, coolDown
+- `name` - Segment name (Warm Up, Endurance, Tempo, etc.)
+
+**Assessment Status Enum:**
+- `DAY1_PENDING` - Test started, Day 1 not yet completed
+- `DAY1_COMPLETED` - Day 1 complete, waiting for Day 2 (15-day window)
+- `DAY2_PENDING` - Day 2 started but not completed
+- `COMPLETED` - Both days completed
+- `EXPIRED` - Day 1 completed but 15-day window elapsed
+
+**Assessment Fields:**
+Day 1 (1'/2'/5' efforts):
 - effort1minAvgPower, effort1minMaxHR
 - effort2minAvgPower, effort2minMaxHR
 - effort5minAvgPower, effort5minMaxHR
+
+Day 2 (5" sprint + 12' climb):
+- sprint5secPeakPower (PEAK power), sprint5secMaxHR
+- climb12minAvgPower (AVERAGE power), climb12minMaxHR
+
+Calculated:
+- estimatedFTP (climb12minAvgPower × 0.95)
+- maxHR (highest HR across all 6 measurements from both days)
 
 ## Clerk Integration
 

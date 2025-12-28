@@ -119,6 +119,19 @@ export class CalendarController {
     return this.calendarService.markWorkoutCompleted(id, data.completed);
   }
 
+  @Put('scheduled/:id/structure')
+  modifyScheduledWorkoutStructure(
+    @Param('id') id: string,
+    @Body() data: { structure: any },
+  ) {
+    return this.calendarService.modifyScheduledWorkoutStructure(id, data.structure);
+  }
+
+  @Delete('scheduled/:id/structure')
+  resetScheduledWorkoutStructure(@Param('id') id: string) {
+    return this.calendarService.resetScheduledWorkoutStructure(id);
+  }
+
   @Put('week/:weekId/day/:dayIndex/reorder')
   reorderDayWorkouts(
     @Param('weekId') weekId: string,
@@ -207,5 +220,42 @@ export class CalendarController {
     },
   ) {
     return this.calendarService.submitWorkoutResults(id, data);
+  }
+
+  // Cross-athlete workout copy (for head-to-head comparison)
+  @Post('scheduled/copy-cross-athlete')
+  copyCrossAthleteWorkout(
+    @Body()
+    data: {
+      sourceScheduledId: string;
+      targetAthleteId: string;
+      targetWeekStart: string;
+      targetDayIndex: number;
+      preserveOverrides?: boolean;
+    },
+  ) {
+    return this.calendarService.copyCrossAthleteWorkout({
+      ...data,
+      targetWeekStart: new Date(data.targetWeekStart),
+    });
+  }
+
+  // Cross-athlete week copy (for head-to-head comparison)
+  @Post('week/copy-cross-athlete')
+  copyCrossAthleteWeek(
+    @Body()
+    data: {
+      sourceAthleteId: string;
+      sourceWeekStart: string;
+      targetAthleteId: string;
+      targetWeekStart: string;
+      strategy: 'merge' | 'overwrite';
+    },
+  ) {
+    return this.calendarService.copyCrossAthleteWeek({
+      ...data,
+      sourceWeekStart: new Date(data.sourceWeekStart),
+      targetWeekStart: new Date(data.targetWeekStart),
+    });
   }
 }

@@ -180,6 +180,111 @@ export class CalendarService {
     });
   }
 
+  /**
+   * Calculate TSS and IF from workout structure
+   */
+  private calculateWorkoutMetrics(structure: any): {
+    durationSeconds: number;
+    tss: number;
+    if: number;
+  } {
+    let totalDuration = 0;
+    let totalIntensity = 0;
+    let segmentCount = 0;
+
+    const processStep = (step: any, multiplier = 1) => {
+      const durationSeconds =
+        step.length?.unit === 'minute'
+          ? step.length.value * 60
+          : step.length?.value || 0;
+
+      const target = step.targets?.[0] || { minValue: 50, maxValue: 75 };
+      const avgIntensity = (target.minValue + target.maxValue) / 2 / 100; // Convert % to decimal
+
+      totalDuration += durationSeconds * multiplier;
+      totalIntensity += avgIntensity * durationSeconds * multiplier;
+      segmentCount++;
+    };
+
+    const processItem = (item: any, multiplier = 1) => {
+      if (item.type === 'repetition') {
+        const repeatCount = item.length?.value || 1;
+        item.steps?.forEach((step: any) => {
+          if (step.type === 'repetition') {
+            processItem(step, multiplier * repeatCount);
+          } else {
+            processStep(step, multiplier * repeatCount);
+          }
+        });
+      } else if (item.type === 'step') {
+        item.steps?.forEach((step: any) => processStep(step, multiplier));
+      }
+    };
+
+    if (structure && structure.structure) {
+      structure.structure.forEach((item: any) => processItem(item));
+    }
+
+    // Calculate IF (Intensity Factor) = weighted average intensity
+    const intensityFactor = totalDuration > 0 ? totalIntensity / totalDuration : 0;
+
+    // Calculate TSS (Training Stress Score) = (duration_hours * NP^2 * IF) / (FTP * 3600) * 100
+    // Simplified: TSS ≈ duration_hours * IF^2 * 100
+    const durationHours = totalDuration / 3600;
+    const tss = durationHours * Math.pow(intensityFactor, 2) * 100;
+
+    return {
+      durationSeconds: Math.round(totalDuration),
+      tss: Math.round(tss * 10) / 10, // Round to 1 decimal
+      if: Math.round(intensityFactor * 100) / 100, // Round to 2 decimals
+    };
+  }
+
+  /**
+   * Modify scheduled workout structure for a specific athlete/day
+   */
+  async modifyScheduledWorkoutStructure(id: string, structure: any) {
+    // Calculate metrics from modified structure
+    const metrics = this.calculateWorkoutMetrics(structure);
+
+    return this.prisma.scheduledWorkout.update({
+      where: { id },
+      data: {
+        structureOverride: structure,
+        durationOverride: metrics.durationSeconds,
+        tssOverride: metrics.tss,
+        ifOverride: metrics.if,
+        isModified: true,
+      },
+      include: {
+        workout: {
+          include: { category: true },
+        },
+      },
+    });
+  }
+
+  /**
+   * Reset scheduled workout to original structure
+   */
+  async resetScheduledWorkoutStructure(id: string) {
+    return this.prisma.scheduledWorkout.update({
+      where: { id },
+      data: {
+        structureOverride: Prisma.JsonNull,
+        durationOverride: null,
+        tssOverride: null,
+        ifOverride: null,
+        isModified: false,
+      },
+      include: {
+        workout: {
+          include: { category: true },
+        },
+      },
+    });
+  }
+
   // Reorder workouts within a day
   async reorderDayWorkouts(
     trainingWeekId: string,
@@ -599,6 +704,225 @@ export class CalendarService {
         athleteId: g.athleteId,
         athleteName: g.athlete.fullName || g.athlete.email.split('@')[0],
       })),
+    };
+  }
+
+  /**
+   * Copy a single scheduled workout from one athlete to another
+   * Preserves workout modifications (structure overrides, etc.)
+   */
+  async copyCrossAthleteWorkout(data: {
+    sourceScheduledId: string;
+    targetAthleteId: string;
+    targetWeekStart: Date;
+    targetDayIndex: number;
+    preserveOverrides?: boolean;
+  }) {
+    // Fetch source workout with all details
+    const sourceWorkout = await this.prisma.scheduledWorkout.findUnique({
+      where: { id: data.sourceScheduledId },
+      include: {
+        workout: true,
+      },
+    });
+
+    if (!sourceWorkout) {
+      throw new Error('Source workout not found');
+    }
+
+    // Get or create target training week
+    let targetWeek = await this.prisma.trainingWeek.findUnique({
+      where: {
+        athleteId_weekStart: {
+          athleteId: data.targetAthleteId,
+          weekStart: data.targetWeekStart,
+        },
+      },
+    });
+
+    if (!targetWeek) {
+      // Create new week if it doesn't exist
+      targetWeek = await this.prisma.trainingWeek.create({
+        data: {
+          weekStart: data.targetWeekStart,
+          athlete: { connect: { id: data.targetAthleteId } },
+        },
+      });
+    }
+
+    // Get max sort order for target day
+    const existingWorkouts = await this.prisma.scheduledWorkout.findMany({
+      where: {
+        trainingWeekId: targetWeek.id,
+        dayIndex: data.targetDayIndex,
+      },
+      orderBy: { sortOrder: 'desc' },
+      take: 1,
+    });
+
+    const newSortOrder = existingWorkouts.length > 0
+      ? existingWorkouts[0].sortOrder + 1
+      : 0;
+
+    // Create new scheduled workout
+    const copiedWorkout = await this.prisma.scheduledWorkout.create({
+      data: {
+        dayIndex: data.targetDayIndex,
+        sortOrder: newSortOrder,
+        completed: false, // Always start uncompleted
+        trainingWeek: { connect: { id: targetWeek.id } },
+        workout: { connect: { id: sourceWorkout.workoutId } },
+        // Preserve overrides if requested and source has modifications
+        ...(data.preserveOverrides &&
+          sourceWorkout.isModified && {
+            structureOverride: sourceWorkout.structureOverride as Prisma.InputJsonValue,
+            durationOverride: sourceWorkout.durationOverride,
+            tssOverride: sourceWorkout.tssOverride,
+            ifOverride: sourceWorkout.ifOverride,
+            isModified: true,
+          }),
+      },
+      include: {
+        workout: {
+          include: { category: true },
+        },
+      },
+    });
+
+    return copiedWorkout;
+  }
+
+  /**
+   * Copy an entire week of workouts from one athlete to another
+   * Supports merge (add to existing) and overwrite (replace existing) strategies
+   */
+  async copyCrossAthleteWeek(data: {
+    sourceAthleteId: string;
+    sourceWeekStart: Date;
+    targetAthleteId: string;
+    targetWeekStart: Date;
+    strategy: 'merge' | 'overwrite';
+  }) {
+    // Fetch source week with all workouts
+    const sourceWeek = await this.prisma.trainingWeek.findUnique({
+      where: {
+        athleteId_weekStart: {
+          athleteId: data.sourceAthleteId,
+          weekStart: data.sourceWeekStart,
+        },
+      },
+      include: {
+        scheduledWorkouts: {
+          include: { workout: true },
+          orderBy: [{ dayIndex: 'asc' }, { sortOrder: 'asc' }],
+        },
+      },
+    });
+
+    if (!sourceWeek) {
+      throw new Error('Source week not found');
+    }
+
+    if (sourceWeek.scheduledWorkouts.length === 0) {
+      throw new Error('Source week has no workouts to copy');
+    }
+
+    // Get or create target week
+    let targetWeek = await this.prisma.trainingWeek.findUnique({
+      where: {
+        athleteId_weekStart: {
+          athleteId: data.targetAthleteId,
+          weekStart: data.targetWeekStart,
+        },
+      },
+      include: {
+        scheduledWorkouts: true,
+      },
+    });
+
+    if (!targetWeek) {
+      targetWeek = await this.prisma.trainingWeek.create({
+        data: {
+          weekStart: data.targetWeekStart,
+          athlete: { connect: { id: data.targetAthleteId } },
+        },
+        include: {
+          scheduledWorkouts: true,
+        },
+      });
+    }
+
+    let deletedCount = 0;
+
+    // Handle overwrite strategy: delete existing workouts
+    if (data.strategy === 'overwrite' && targetWeek.scheduledWorkouts.length > 0) {
+      const deleteResult = await this.prisma.scheduledWorkout.deleteMany({
+        where: { trainingWeekId: targetWeek.id },
+      });
+      deletedCount = deleteResult.count;
+    }
+
+    // Copy all workouts from source to target
+    const copiedWorkouts: any[] = [];
+
+    for (const sourceWorkout of sourceWeek.scheduledWorkouts) {
+      // For merge strategy, get max sort order for each day
+      let sortOrder = sourceWorkout.sortOrder;
+
+      if (data.strategy === 'merge') {
+        const existingOnDay = await this.prisma.scheduledWorkout.findMany({
+          where: {
+            trainingWeekId: targetWeek.id,
+            dayIndex: sourceWorkout.dayIndex,
+          },
+          orderBy: { sortOrder: 'desc' },
+          take: 1,
+        });
+
+        sortOrder = existingOnDay.length > 0
+          ? existingOnDay[0].sortOrder + 1 + sourceWorkout.sortOrder
+          : sourceWorkout.sortOrder;
+      }
+
+      const copiedWorkout = await this.prisma.scheduledWorkout.create({
+        data: {
+          dayIndex: sourceWorkout.dayIndex,
+          sortOrder,
+          completed: false, // Always start uncompleted
+          trainingWeek: { connect: { id: targetWeek.id } },
+          workout: { connect: { id: sourceWorkout.workoutId } },
+          // Preserve overrides if source has modifications
+          ...(sourceWorkout.isModified && {
+            structureOverride: sourceWorkout.structureOverride as Prisma.InputJsonValue,
+            durationOverride: sourceWorkout.durationOverride,
+            tssOverride: sourceWorkout.tssOverride,
+            ifOverride: sourceWorkout.ifOverride,
+            isModified: true,
+          }),
+        },
+        include: {
+          workout: {
+            include: { category: true },
+          },
+        },
+      });
+
+      copiedWorkouts.push(copiedWorkout);
+    }
+
+    // Get final count
+    const finalWeek = await this.prisma.trainingWeek.findUnique({
+      where: { id: targetWeek.id },
+      include: {
+        scheduledWorkouts: true,
+      },
+    });
+
+    return {
+      copiedCount: copiedWorkouts.length,
+      deletedCount,
+      totalWorkouts: finalWeek?.scheduledWorkouts.length || copiedWorkouts.length,
+      trainingWeekId: targetWeek.id,
     };
   }
 }

@@ -14,6 +14,7 @@
  * - CalendarModule: Training calendar and scheduling
  * - AvailabilityModule: Athlete training availability
  * - GoalsModule: Athlete training goals
+ * - ZonesModule: Power and HR zone management
  *
  * @module app
  */
@@ -35,6 +36,8 @@ import { EmailInvitationsModule } from './email-invitations/email-invitations.mo
 import { CategoriesModule } from './categories/categories.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { AssessmentsModule } from './assessments/assessments.module';
+import { WorkoutParsersModule } from './workout-parsers/workout-parsers.module';
+import { ZonesModule } from './zones/zones.module';
 
 /**
  * Root application module
@@ -67,6 +70,12 @@ import { AssessmentsModule } from './assessments/assessments.module';
     // Onboarding & Assessments
     OnboardingModule,
     AssessmentsModule,
+
+    // Workout file parsing
+    WorkoutParsersModule,
+
+    // Training zones
+    ZonesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

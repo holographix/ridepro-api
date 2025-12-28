@@ -11,7 +11,6 @@ export default defineConfig({
   datasource: {
     // Connection pooling URL for queries
     url: env("DATABASE_URL"),
-    // Direct URL for migrations (bypasses pgbouncer)
-    directUrl: env("DIRECT_URL"),
+    // Note: directUrl is configured in schema.prisma, not here
   },
 });

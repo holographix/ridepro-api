@@ -66,9 +66,13 @@ enum ActivityType {
   CROSS_SKIING
 }
 
-enum AssessmentType {
-  SPRINT_12MIN    // 15" sprint + 12' climb protocol
-  POWER_1_2_5MIN  // 1'/2'/5' efforts protocol
+// Assessment status for 2-day protocol
+enum AssessmentStatus {
+  DAY1_PENDING      // Test started, Day 1 not yet completed
+  DAY1_COMPLETED    // Day 1 complete, waiting for Day 2
+  DAY2_PENDING      // Day 2 started but not completed
+  COMPLETED         // Both days completed
+  EXPIRED           // Day 1 completed but 15-day window elapsed
 }
 
 model User {
@@ -77,6 +81,8 @@ model User {
   email         String    @unique
   fullName      String?   @map("full_name")
   ftp           Int?      // Functional Threshold Power (watts)
+  maxHR         Int?      @map("max_hr")     // Maximum heart rate (bpm)
+  restingHR     Int?      @map("resting_hr") // Resting heart rate (bpm) - for Karvonen
   avatarUrl     String?   @map("avatar_url")
 
   // General availability notes (athlete can explain their typical schedule)
@@ -144,6 +150,10 @@ model User {
   disciplines       AthleteDiscipline[]
   activityTypes     AthleteActivityType[]
   assessments       Assessment[]
+
+  // Training zones
+  powerZones        PowerZone?
+  hrZones           HRZone?
 
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
@@ -328,6 +338,9 @@ model Workout {
   structure         Json             // The nested structure for visualizer
   rawJson           Json?            @map("raw_json") // Full original JSON
 
+  // Attachments (file URLs)
+  attachments       String[]         @default([]) // File URLs for workout attachments
+
   // Category
   categoryId        String           @map("category_id")
   category          WorkoutCategory  @relation(fields: [categoryId], references: [id])
@@ -411,6 +424,17 @@ model ScheduledWorkout {
 
   workoutId       String        @map("workout_id")
   workout         Workout       @relation(fields: [workoutId], references: [id])
+
+  // ============================================
+  // WORKOUT STRUCTURE OVERRIDES
+  // When a coach modifies a scheduled workout for a specific athlete/day,
+  // these fields contain the customized values. If null, use original workout data.
+  // ============================================
+  structureOverride Json?    @map("structure_override")  // Modified workout structure
+  durationOverride  Int?     @map("duration_override")   // Modified duration in seconds
+  tssOverride       Float?   @map("tss_override")        // Recalculated TSS
+  ifOverride        Float?   @map("if_override")         // Recalculated IF
+  isModified        Boolean  @default(false) @map("is_modified") // Quick flag for modified workouts
 
   createdAt       DateTime      @default(now()) @map("created_at")
 
@@ -519,43 +543,109 @@ model AthleteActivityType {
 // ASSESSMENTS - Fitness Testing
 // ============================================
 
+// ============================================
+// 2-DAY ASSESSMENT PROTOCOL
+// Day 1: 1'/2'/5' efforts on 6-7% gradient
+// Day 2: 5" sprint + 12' climb on 6-7% gradient
+// Athletes have 15 days to complete Day 2 after Day 1
+// ============================================
 model Assessment {
-  id              String          @id @default(uuid())
-  athleteId       String          @map("athlete_id")
-  athlete         User            @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  id                  String            @id @default(uuid())
+  athleteId           String            @map("athlete_id")
+  athlete             User              @relation(fields: [athleteId], references: [id], onDelete: Cascade)
 
-  testType        AssessmentType  @map("test_type")
-  testDate        DateTime        @map("test_date")
-
-  // ============================================
-  // Sprint + 12min protocol
-  // PEAK = maximum power during the effort
-  // AVG = average power over the duration
-  // ============================================
-  sprintPeakPower Int?            @map("sprint_peak_power")    // Peak power during 15" sprint (W)
-  sprintMaxHR     Int?            @map("sprint_max_hr")        // Max HR during sprint (bpm)
-  climb12AvgPower Int?            @map("climb_12_avg_power")   // Avg power during 12' climb (W)
-  climb12MaxHR    Int?            @map("climb_12_max_hr")      // Max HR during 12' climb (bpm)
+  // Test state and timing
+  testStatus          AssessmentStatus  @default(DAY1_PENDING) @map("test_status")
+  startedAt           DateTime          @default(now()) @map("started_at")        // When test was initiated
+  day1CompletedAt     DateTime?         @map("day1_completed_at")                // When Day 1 was completed
+  day2CompletedAt     DateTime?         @map("day2_completed_at")                // When Day 2 was completed
+  expiresAt           DateTime?         @map("expires_at")                        // 15 days after day1CompletedAt
 
   // ============================================
-  // 1/2/5 minute protocol
+  // DAY 1: Power Profile Test (1'/2'/5')
   // All AVERAGE power over the effort duration
+  // Performed on 6-7% gradient climb
   // ============================================
-  effort1minAvgPower  Int?        @map("effort_1min_avg_power")  // Avg power during 1' effort (W)
-  effort1minMaxHR     Int?        @map("effort_1min_max_hr")     // Max HR during 1' effort (bpm)
-  effort2minAvgPower  Int?        @map("effort_2min_avg_power")  // Avg power during 2' effort (W)
-  effort2minMaxHR     Int?        @map("effort_2min_max_hr")     // Max HR during 2' effort (bpm)
-  effort5minAvgPower  Int?        @map("effort_5min_avg_power")  // Avg power during 5' effort (W)
-  effort5minMaxHR     Int?        @map("effort_5min_max_hr")     // Max HR during 5' effort (bpm)
+  effort1minAvgPower  Int?              @map("effort_1min_avg_power")  // Avg power during 1' effort (W)
+  effort1minMaxHR     Int?              @map("effort_1min_max_hr")     // Max HR during 1' effort (bpm)
+  effort2minAvgPower  Int?              @map("effort_2min_avg_power")  // Avg power during 2' effort (W)
+  effort2minMaxHR     Int?              @map("effort_2min_max_hr")     // Max HR during 2' effort (bpm)
+  effort5minAvgPower  Int?              @map("effort_5min_avg_power")  // Avg power during 5' effort (W)
+  effort5minMaxHR     Int?              @map("effort_5min_max_hr")     // Max HR during 5' effort (bpm)
 
-  // Calculated/estimated values
-  estimatedFTP    Int?            @map("estimated_ftp")
-  notes           String?
+  // ============================================
+  // DAY 2: Sprint + Endurance Test (5"/12')
+  // 5" = PEAK power, 12' = AVERAGE power
+  // Performed on 6-7% gradient climb
+  // ============================================
+  sprint5secPeakPower Int?              @map("sprint_5sec_peak_power") // Peak power during 5" sprint (W)
+  sprint5secMaxHR     Int?              @map("sprint_5sec_max_hr")     // Max HR during 5" sprint (bpm)
+  climb12minAvgPower  Int?              @map("climb_12min_avg_power")  // Avg power during 12' climb (W)
+  climb12minMaxHR     Int?              @map("climb_12min_max_hr")     // Max HR during 12' climb (bpm)
 
-  createdAt       DateTime        @default(now()) @map("created_at")
-  updatedAt       DateTime        @updatedAt @map("updated_at")
+  // ============================================
+  // CALCULATED VALUES
+  // Computed when Day 2 is completed
+  // ============================================
+  estimatedFTP        Int?              @map("estimated_ftp")          // FTP = climb12minAvgPower × 0.95
+  maxHR               Int?              @map("max_hr")                 // Max across all HR values
+  notes               String?
+
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
 
   @@index([athleteId])
-  @@index([testDate])
+  @@index([testStatus])
+  @@index([day1CompletedAt])
+  @@index([day2CompletedAt])
+  @@index([expiresAt])
   @@map("assessments")
+}
+
+// ============================================
+// POWER & HR ZONES
+// ============================================
+
+model PowerZone {
+  id          String   @id @default(uuid())
+  athleteId   String   @unique @map("athlete_id")
+  athlete     User     @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  // Zone system
+  zoneSystem  String   @default("COGGAN") @map("zone_system") // COGGAN, POLARIZED, CUSTOM
+
+  // Custom zone boundaries (% of FTP)
+  zone1Max    Float    @default(55)   @map("zone1_max")  // Active Recovery
+  zone2Max    Float    @default(75)   @map("zone2_max")  // Endurance
+  zone3Max    Float    @default(90)   @map("zone3_max")  // Tempo
+  zone4Max    Float    @default(105)  @map("zone4_max")  // Threshold
+  zone5Max    Float    @default(120)  @map("zone5_max")  // VO2Max
+  zone6Max    Float    @default(150)  @map("zone6_max")  // Anaerobic
+  // Zone 7 = > zone6Max (Neuromuscular)
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("power_zones")
+}
+
+model HRZone {
+  id          String   @id @default(uuid())
+  athleteId   String   @unique @map("athlete_id")
+  athlete     User     @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  // Zone system
+  zoneSystem  String   @default("STANDARD") @map("zone_system") // STANDARD, KARVONEN, CUSTOM
+
+  // Custom zone boundaries (% of max HR or HRR for Karvonen)
+  zone1Max    Float    @default(60)   @map("zone1_max")  // Recovery
+  zone2Max    Float    @default(70)   @map("zone2_max")  // Endurance
+  zone3Max    Float    @default(80)   @map("zone3_max")  // Tempo
+  zone4Max    Float    @default(90)   @map("zone4_max")  // Threshold
+  zone5Max    Float    @default(100)  @map("zone5_max")  // Max
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("hr_zones")
 }

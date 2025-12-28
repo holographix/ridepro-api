@@ -2,23 +2,110 @@ import {
   Controller,
   Get,
   Post,
-  Put,
   Delete,
   Body,
   Param,
-  Query,
 } from '@nestjs/common';
 import { Public } from '../auth/public.decorator';
 import { AssessmentsService } from './assessments.service';
-import { AssessmentType } from '@prisma/client';
+import type { Day1Data, Day2Data } from './assessments.service';
 
 @Public()
 @Controller('api/assessments')
 export class AssessmentsController {
   constructor(private readonly assessmentsService: AssessmentsService) {}
 
+  // ============================================
+  // 2-DAY ASSESSMENT WORKFLOW
+  // ============================================
+
   /**
-   * Get all assessments for an athlete
+   * Start a new 2-day assessment test
+   * Creates assessment with status DAY1_PENDING
+   *
+   * POST /api/assessments/start
+   * Body: { athleteId: string }
+   */
+  @Post('start')
+  startTest(@Body() data: { athleteId: string }) {
+    return this.assessmentsService.startTest(data.athleteId);
+  }
+
+  /**
+   * Complete Day 1 of the assessment (1'/2'/5' efforts)
+   * Transitions from DAY1_PENDING → DAY1_COMPLETED
+   * Sets expiration date (15 days from now)
+   *
+   * POST /api/assessments/:id/complete-day1
+   * Body: Day1Data
+   */
+  @Post(':id/complete-day1')
+  completeDay1(
+    @Param('id') id: string,
+    @Body() data: Day1Data,
+  ) {
+    return this.assessmentsService.completeDay1(id, data);
+  }
+
+  /**
+   * Start Day 2 of the assessment
+   * Validates Day 1 is complete and test hasn't expired
+   * Transitions from DAY1_COMPLETED → DAY2_PENDING
+   *
+   * POST /api/assessments/:id/start-day2
+   */
+  @Post(':id/start-day2')
+  startDay2(@Param('id') id: string) {
+    return this.assessmentsService.startDay2(id);
+  }
+
+  /**
+   * Complete Day 2 of the assessment (5" sprint + 12' climb)
+   * Transitions from DAY2_PENDING → COMPLETED
+   * Calculates FTP and maxHR
+   * Auto-updates athlete's profile
+   *
+   * POST /api/assessments/:id/complete-day2
+   * Body: Day2Data
+   */
+  @Post(':id/complete-day2')
+  completeDay2(
+    @Param('id') id: string,
+    @Body() data: Day2Data,
+  ) {
+    return this.assessmentsService.completeDay2(id, data);
+  }
+
+  /**
+   * Get ongoing test for an athlete (if any)
+   * Returns test that is not COMPLETED or EXPIRED
+   *
+   * GET /api/assessments/athlete/:athleteId/ongoing
+   */
+  @Get('athlete/:athleteId/ongoing')
+  getOngoingTest(@Param('athleteId') athleteId: string) {
+    return this.assessmentsService.getOngoingTest(athleteId);
+  }
+
+  /**
+   * Check for expired tests and mark them as EXPIRED
+   * Background job endpoint or on-demand check
+   *
+   * POST /api/assessments/check-expired
+   */
+  @Post('check-expired')
+  checkExpiredTests() {
+    return this.assessmentsService.checkExpiredTests();
+  }
+
+  // ============================================
+  // QUERY ENDPOINTS
+  // ============================================
+
+  /**
+   * Get all completed assessments for an athlete
+   *
+   * GET /api/assessments/athlete/:athleteId
    */
   @Get('athlete/:athleteId')
   getAthleteAssessments(@Param('athleteId') athleteId: string) {
@@ -26,140 +113,31 @@ export class AssessmentsController {
   }
 
   /**
-   * Get latest assessment for an athlete
+   * Get latest completed assessment for an athlete
+   *
+   * GET /api/assessments/athlete/:athleteId/latest
    */
   @Get('athlete/:athleteId/latest')
-  getLatestAssessment(
-    @Param('athleteId') athleteId: string,
-    @Query('type') testType?: AssessmentType,
-  ) {
-    return this.assessmentsService.getLatestAssessment(athleteId, testType);
+  getLatestAssessment(@Param('athleteId') athleteId: string) {
+    return this.assessmentsService.getLatestAssessment(athleteId);
   }
 
   /**
-   * Get a single assessment by ID
+   * Get athlete stats including assessment data
+   * Used for the AthleteStatsPage
+   *
+   * GET /api/assessments/athlete/:athleteId/stats
    */
-  @Get(':id')
-  getAssessment(@Param('id') id: string) {
-    return this.assessmentsService.getAssessment(id);
-  }
-
-  /**
-   * Create Sprint + 12min protocol assessment
-   * Sprint: 15" all-out effort - record PEAK power
-   * Climb: 12' steady climb - record AVERAGE power
-   */
-  @Post('sprint-12min')
-  createSprint12MinAssessment(
-    @Body()
-    data: {
-      athleteId: string;
-      testDate: string;
-      sprintPeakPower?: number;   // Peak power during 15" sprint (W)
-      sprintMaxHR?: number;       // Max HR during sprint (bpm)
-      climb12AvgPower?: number;   // Average power during 12' climb (W)
-      climb12MaxHR?: number;      // Max HR during 12' climb (bpm)
-      notes?: string;
-    },
-  ) {
-    return this.assessmentsService.createSprint12MinAssessment(data.athleteId, {
-      testDate: new Date(data.testDate),
-      sprintPeakPower: data.sprintPeakPower,
-      sprintMaxHR: data.sprintMaxHR,
-      climb12AvgPower: data.climb12AvgPower,
-      climb12MaxHR: data.climb12MaxHR,
-      notes: data.notes,
-    });
-  }
-
-  /**
-   * Create 1/2/5min protocol assessment
-   * All efforts record AVERAGE power over the duration
-   */
-  @Post('power-125min')
-  createPower125MinAssessment(
-    @Body()
-    data: {
-      athleteId: string;
-      testDate: string;
-      effort1minAvgPower?: number;  // Average power during 1' effort (W)
-      effort1minMaxHR?: number;     // Max HR during 1' effort (bpm)
-      effort2minAvgPower?: number;  // Average power during 2' effort (W)
-      effort2minMaxHR?: number;     // Max HR during 2' effort (bpm)
-      effort5minAvgPower?: number;  // Average power during 5' effort (W)
-      effort5minMaxHR?: number;     // Max HR during 5' effort (bpm)
-      notes?: string;
-    },
-  ) {
-    return this.assessmentsService.createPower125MinAssessment(data.athleteId, {
-      testDate: new Date(data.testDate),
-      effort1minAvgPower: data.effort1minAvgPower,
-      effort1minMaxHR: data.effort1minMaxHR,
-      effort2minAvgPower: data.effort2minAvgPower,
-      effort2minMaxHR: data.effort2minMaxHR,
-      effort5minAvgPower: data.effort5minAvgPower,
-      effort5minMaxHR: data.effort5minMaxHR,
-      notes: data.notes,
-    });
-  }
-
-  /**
-   * Update an assessment
-   */
-  @Put(':id')
-  updateAssessment(
-    @Param('id') id: string,
-    @Body()
-    data: {
-      testDate?: string;
-      sprintPeakPower?: number;
-      sprintMaxHR?: number;
-      climb12AvgPower?: number;
-      climb12MaxHR?: number;
-      effort1minAvgPower?: number;
-      effort1minMaxHR?: number;
-      effort2minAvgPower?: number;
-      effort2minMaxHR?: number;
-      effort5minAvgPower?: number;
-      effort5minMaxHR?: number;
-      notes?: string;
-    },
-  ) {
-    return this.assessmentsService.updateAssessment(id, {
-      ...(data.testDate && { testDate: new Date(data.testDate) }),
-      sprintPeakPower: data.sprintPeakPower,
-      sprintMaxHR: data.sprintMaxHR,
-      climb12AvgPower: data.climb12AvgPower,
-      climb12MaxHR: data.climb12MaxHR,
-      effort1minAvgPower: data.effort1minAvgPower,
-      effort1minMaxHR: data.effort1minMaxHR,
-      effort2minAvgPower: data.effort2minAvgPower,
-      effort2minMaxHR: data.effort2minMaxHR,
-      effort5minAvgPower: data.effort5minAvgPower,
-      effort5minMaxHR: data.effort5minMaxHR,
-      notes: data.notes,
-    });
-  }
-
-  /**
-   * Delete an assessment
-   */
-  @Delete(':id')
-  deleteAssessment(@Param('id') id: string) {
-    return this.assessmentsService.deleteAssessment(id);
-  }
-
-  /**
-   * Update athlete's FTP based on latest assessment
-   */
-  @Post('athlete/:athleteId/update-ftp')
-  updateAthleteFTP(@Param('athleteId') athleteId: string) {
-    return this.assessmentsService.updateAthleteFTP(athleteId);
+  @Get('athlete/:athleteId/stats')
+  getAthleteStats(@Param('athleteId') athleteId: string) {
+    return this.assessmentsService.getAthleteStats(athleteId);
   }
 
   /**
    * Get assessment status for all athletes of a coach
    * Returns which athletes have assessments, are overdue, or have new submissions
+   *
+   * GET /api/assessments/coach/:coachId/status
    */
   @Get('coach/:coachId/status')
   getCoachAthletesAssessmentStatus(@Param('coachId') coachId: string) {
@@ -167,11 +145,27 @@ export class AssessmentsController {
   }
 
   /**
-   * Get athlete stats including assessment data
-   * Used for the AthleteStatsPage
+   * Get a single assessment by ID
+   *
+   * GET /api/assessments/:id
    */
-  @Get('athlete/:athleteId/stats')
-  getAthleteStats(@Param('athleteId') athleteId: string) {
-    return this.assessmentsService.getAthleteStats(athleteId);
+  @Get(':id')
+  getAssessment(@Param('id') id: string) {
+    return this.assessmentsService.getAssessment(id);
+  }
+
+  // ============================================
+  // MANAGEMENT ENDPOINTS
+  // ============================================
+
+  /**
+   * Delete an assessment
+   * Only allowed for tests in progress (not completed)
+   *
+   * DELETE /api/assessments/:id
+   */
+  @Delete(':id')
+  deleteAssessment(@Param('id') id: string) {
+    return this.assessmentsService.deleteAssessment(id);
   }
 }

@@ -1,0 +1,17 @@
+<workout_file>
+	<author>massimo rosa (via TrainingPeaks)</author>
+	<name>SAP</name>
+	<description></description>
+	<sportType>bike</sportType>
+	<tags/>
+	<workout>
+		<Warmup Duration="2700" PowerHigh="0.55" PowerLow="0.35">
+		</Warmup>
+		<SteadyState Duration="3600" Power="0.75">
+		</SteadyState>
+		<SteadyState Duration="2700" Power="0.55">
+		</SteadyState>
+		<Cooldown Duration="1800" PowerHigh="0.35" PowerLow="0.55">
+		</Cooldown>
+	</workout>
+</workout_file>
