@@ -150,10 +150,10 @@ export class FitParserService {
       }
 
       // Determine file type by checking which messages exist
-      const hasWorkoutMessages = messages.workoutMessages?.length > 0;
-      const hasWorkoutStepMessages = messages.workoutStepMessages?.length > 0;
-      const hasRecordMessages = messages.recordMessages?.length > 0;
-      const hasSessionMessages = messages.sessionMessages?.length > 0;
+      const hasWorkoutMessages = messages.workoutMesgs?.length > 0;
+      const hasWorkoutStepMessages = messages.workoutStepMesgs?.length > 0;
+      const hasRecordMessages = messages.recordMesgs?.length > 0;
+      const hasSessionMessages = messages.sessionMesgs?.length > 0;
 
       if (hasWorkoutMessages || hasWorkoutStepMessages) {
         // This is a PLANNED WORKOUT from TrainingPeaks
@@ -196,8 +196,8 @@ export class FitParserService {
    * Parse PLANNED WORKOUT from TrainingPeaks FIT file
    */
   private parsePlannedWorkout(messages: any): ParsedPlannedWorkout {
-    const workoutMsg = messages.workoutMessages?.[0];
-    const workoutSteps = messages.workoutStepMessages || [];
+    const workoutMsg = messages.workoutMesgs?.[0];
+    const workoutSteps = messages.workoutStepMesgs || [];
 
     if (!workoutMsg && workoutSteps.length === 0) {
       throw new BadRequestException('No workout data found in FIT file');
@@ -260,9 +260,9 @@ export class FitParserService {
     messages: any,
     filename?: string,
   ): ParsedCompletedActivity {
-    const sessionMsg = messages.sessionMessages?.[0];
-    const recordMsgs = messages.recordMessages || [];
-    const lapMsgs = messages.lapMessages || [];
+    const sessionMsg = messages.sessionMesgs?.[0];
+    const recordMsgs = messages.recordMesgs || [];
+    const lapMsgs = messages.lapMesgs || [];
 
     if (!sessionMsg && recordMsgs.length === 0) {
       throw new BadRequestException('No activity data found in FIT file');

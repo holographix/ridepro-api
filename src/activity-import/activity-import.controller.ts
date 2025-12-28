@@ -16,17 +16,23 @@ import {
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiConsumes, ApiBody, ApiOperation } from '@nestjs/swagger';
 import { ActivityImportService, ImportedActivity } from './activity-import.service';
-import { Activity } from '@prisma/client';
+import { WorkoutImportService, ImportedWorkout } from './workout-import.service';
+import { Activity, Workout } from '@prisma/client';
 
 /**
- * Activity Import Controller
+ * Activity & Workout Import Controller
  *
- * Endpoints for importing completed activities from FIT files
+ * Endpoints for importing:
+ * - Completed activities from FIT files (athlete uploads)
+ * - Planned workouts from TrainingPeaks FIT files (coach imports)
  */
 @ApiTags('activity-import')
 @Controller('api/activity-import')
 export class ActivityImportController {
-  constructor(private activityImportService: ActivityImportService) {}
+  constructor(
+    private activityImportService: ActivityImportService,
+    private workoutImportService: WorkoutImportService,
+  ) {}
 
   /**
    * Import single activity from FIT file
@@ -181,5 +187,127 @@ export class ActivityImportController {
   async deleteActivity(@Param('activityId') activityId: string): Promise<{ deleted: boolean }> {
     await this.activityImportService.deleteActivity(activityId);
     return { deleted: true };
+  }
+
+  // ========================================
+  // WORKOUT IMPORT ENDPOINTS (TrainingPeaks planned workouts)
+  // ========================================
+
+  /**
+   * Import planned workout from TrainingPeaks FIT file
+   *
+   * POST /api/activity-import/workout/upload
+   */
+  @Post('workout/upload')
+  @ApiOperation({ summary: 'Import planned workout from TrainingPeaks FIT file' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+        },
+        coachId: {
+          type: 'string',
+          description: 'Coach UUID',
+        },
+        categoryId: {
+          type: 'string',
+          description: 'Workout category UUID (optional)',
+        },
+        overrideName: {
+          type: 'string',
+          description: 'Override workout name (optional)',
+        },
+        overrideDescription: {
+          type: 'string',
+          description: 'Override workout description (optional)',
+        },
+      },
+      required: ['file', 'coachId'],
+    },
+  })
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadWorkout(
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 10 * 1024 * 1024 }), // 10MB
+          new FileTypeValidator({
+            fileType: /\.(fit|fit\.gz)$/i,
+          }),
+        ],
+      }),
+    )
+    file: Express.Multer.File,
+    @Body('coachId') coachId: string,
+    @Body('categoryId') categoryId?: string,
+    @Body('overrideName') overrideName?: string,
+    @Body('overrideDescription') overrideDescription?: string,
+  ): Promise<ImportedWorkout> {
+    return this.workoutImportService.importPlannedWorkout({
+      coachId,
+      buffer: file.buffer,
+      filename: file.originalname,
+      categoryId,
+      overrideName,
+      overrideDescription,
+    });
+  }
+
+  /**
+   * Import multiple planned workouts in batch
+   *
+   * POST /api/activity-import/workout/upload-batch
+   */
+  @Post('workout/upload-batch')
+  @ApiOperation({
+    summary: 'Import multiple planned workouts from TrainingPeaks FIT files (batch)',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        files: {
+          type: 'array',
+          items: {
+            type: 'string',
+            format: 'binary',
+          },
+        },
+        coachId: {
+          type: 'string',
+          description: 'Coach UUID',
+        },
+        categoryId: {
+          type: 'string',
+          description: 'Workout category UUID (optional)',
+        },
+      },
+      required: ['files', 'coachId'],
+    },
+  })
+  @UseInterceptors(FilesInterceptor('files', 50)) // Max 50 files
+  async uploadWorkoutBatch(
+    @UploadedFiles(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 10 * 1024 * 1024 }), // 10MB per file
+        ],
+      }),
+    )
+    files: Express.Multer.File[],
+    @Body('coachId') coachId: string,
+    @Body('categoryId') categoryId?: string,
+  ): Promise<ImportedWorkout[]> {
+    const fileBuffers = files.map(file => ({
+      buffer: file.buffer,
+      filename: file.originalname,
+    }));
+
+    return this.workoutImportService.importBatch(coachId, fileBuffers, categoryId);
   }
 }
