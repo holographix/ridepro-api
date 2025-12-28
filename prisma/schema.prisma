@@ -155,6 +155,9 @@ model User {
   powerZones        PowerZone?
   hrZones           HRZone?
 
+  // Completed activities (imported FIT files)
+  activities        Activity[]        @relation("AthleteActivities")
+
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
 
@@ -436,6 +439,9 @@ model ScheduledWorkout {
   ifOverride        Float?   @map("if_override")         // Recalculated IF
   isModified        Boolean  @default(false) @map("is_modified") // Quick flag for modified workouts
 
+  // Linked completed activities (imported from FIT files)
+  activities        Activity[]
+
   createdAt       DateTime      @default(now()) @map("created_at")
 
   @@index([trainingWeekId, dayIndex])
@@ -649,3 +655,108 @@ model HRZone {
 
   @@map("hr_zones")
 }
+
+// ============================================
+// ACTIVITY IMPORT (FIT Files, Completed Rides)
+// ============================================
+
+enum ActivitySource {
+  ZWIFT
+  TRAININGPEAKS
+  GARMIN
+  WAHOO
+  STRAVA
+  MANUAL
+}
+
+enum ActivityFileFormat {
+  FIT
+  TCX
+  GPX
+  MANUAL
+}
+
+// Completed activity with full telemetry data from FIT files
+model Activity {
+  id              String    @id @default(uuid())
+
+  // Athlete who completed the activity
+  athleteId       String    @map("athlete_id")
+  athlete         User      @relation("AthleteActivities", fields: [athleteId], references: [id], onDelete: Cascade)
+
+  // Optional pairing with scheduled workout
+  scheduledWorkoutId String?           @map("scheduled_workout_id")
+  scheduledWorkout   ScheduledWorkout? @relation(fields: [scheduledWorkoutId], references: [id], onDelete: SetNull)
+
+  // Activity metadata
+  name            String              // Activity name (e.g., "Morning Ride", workout title)
+  activityType    ActivityType        @map("activity_type") // OUTDOOR_CYCLING, INDOOR_CYCLING, etc.
+  source          ActivitySource      // Where it came from
+  fileFormat      ActivityFileFormat  @map("file_format")
+
+  // Timing
+  startTime       DateTime            @map("start_time")
+  endTime         DateTime?           @map("end_time")
+  durationSeconds Int                 @map("duration_seconds")
+  movingTime      Int?                @map("moving_time") // Time actually moving (excluding stops)
+
+  // Distance & Elevation
+  distanceMeters  Float?              @map("distance_meters")
+  elevationGain   Float?              @map("elevation_gain")  // Total ascent in meters
+  elevationLoss   Float?              @map("elevation_loss")  // Total descent in meters
+
+  // Power metrics (if available)
+  avgPower        Int?                @map("avg_power")        // Average power (watts)
+  maxPower        Int?                @map("max_power")        // Max power (watts)
+  normalizedPower Int?                @map("normalized_power") // NP (watts)
+
+  // Heart rate metrics (if available)
+  avgHeartRate    Int?                @map("avg_heart_rate")   // Average HR (bpm)
+  maxHeartRate    Int?                @map("max_heart_rate")   // Max HR (bpm)
+
+  // Cadence (if available)
+  avgCadence      Int?                @map("avg_cadence")      // Average cadence (rpm)
+  maxCadence      Int?                @map("max_cadence")      // Max cadence (rpm)
+
+  // Speed
+  avgSpeed        Float?              @map("avg_speed")        // m/s
+  maxSpeed        Float?              @map("max_speed")        // m/s
+
+  // Training metrics
+  tss             Float?              // Training Stress Score
+  intensityFactor Float?              @map("intensity_factor") // IF (NP/FTP)
+  calories        Int?                // Estimated calories
+
+  // GPS data
+  hasGPS          Boolean             @default(false) @map("has_gps")
+  startLatitude   Float?              @map("start_latitude")  // Start point
+  startLongitude  Float?              @map("start_longitude")
+
+  // Weather (outdoor activities)
+  temperature     Float?              // Celsius
+
+  // Raw telemetry data (second-by-second)
+  // Stored as JSONB for flexibility
+  telemetryData   Json?               @map("telemetry_data") @db.JsonB
+  // Structure: { records: [{ timestamp, lat, lng, altitude, power, hr, cadence, speed, distance, temp }] }
+
+  // Lap/segment data
+  laps            Json?               @db.JsonB
+  // Structure: { laps: [{ startTime, endTime, duration, distance, avgPower, avgHR, etc. }] }
+
+  // Original file storage
+  originalFilename String?            @map("original_filename")
+  fileSize         Int?               @map("file_size") // bytes
+
+  // Notes
+  notes            String?            // Athlete's notes about the activity
+
+  // Timestamps
+  createdAt        DateTime           @default(now()) @map("created_at")
+  updatedAt        DateTime           @updatedAt @map("updated_at")
+
+  @@index([athleteId, startTime])
+  @@index([scheduledWorkoutId])
+  @@map("activities")
+}
+

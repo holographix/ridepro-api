@@ -38,6 +38,7 @@ import { OnboardingModule } from './onboarding/onboarding.module';
 import { AssessmentsModule } from './assessments/assessments.module';
 import { WorkoutParsersModule } from './workout-parsers/workout-parsers.module';
 import { ZonesModule } from './zones/zones.module';
+import { ActivityImportModule } from './activity-import/activity-import.module';
 
 /**
  * Root application module
@@ -76,6 +77,8 @@ import { ZonesModule } from './zones/zones.module';
 
     // Training zones
     ZonesModule,
+
+    ActivityImportModule,
   ],
   controllers: [AppController],
   providers: [AppService],
