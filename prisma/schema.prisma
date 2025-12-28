@@ -410,6 +410,13 @@ model ScheduledWorkout {
   completedAt     DateTime?     @map("completed_at")
 
   // ============================================
+  // SKIP TRACKING (when athlete can't complete workout)
+  // ============================================
+  skipped         Boolean       @default(false)
+  skipReason      String?       @map("skip_reason")  // e.g., "Sick", "Injury", "No time"
+  skippedAt       DateTime?     @map("skipped_at")
+
+  // ============================================
   // ACTUAL RESULTS (filled by athlete after completion)
   // ============================================
   actualDurationSeconds Int?            @map("actual_duration_seconds")

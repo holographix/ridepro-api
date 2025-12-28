@@ -11,13 +11,13 @@ import {
   Body,
   ParseFilePipe,
   MaxFileSizeValidator,
-  FileTypeValidator,
 } from '@nestjs/common';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiConsumes, ApiBody, ApiOperation } from '@nestjs/swagger';
 import { ActivityImportService, ImportedActivity } from './activity-import.service';
 import { WorkoutImportService, ImportedWorkout } from './workout-import.service';
 import { Activity, Workout } from '@prisma/client';
+import { FitFileValidator } from './fit-file.validator';
 
 /**
  * Activity & Workout Import Controller
@@ -58,6 +58,10 @@ export class ActivityImportController {
           type: 'boolean',
           description: 'Auto-pair with scheduled workouts (default: true)',
         },
+        scheduledWorkoutId: {
+          type: 'string',
+          description: 'Specific scheduled workout to pair with (skips auto-matching)',
+        },
       },
       required: ['file', 'athleteId'],
     },
@@ -68,15 +72,14 @@ export class ActivityImportController {
       new ParseFilePipe({
         validators: [
           new MaxFileSizeValidator({ maxSize: 50 * 1024 * 1024 }), // 50MB
-          new FileTypeValidator({
-            fileType: /\.(fit|fit\.gz)$/i,
-          }),
+          new FitFileValidator({}),
         ],
       }),
     )
     file: Express.Multer.File,
     @Body('athleteId') athleteId: string,
     @Body('autoPairWithScheduled') autoPairWithScheduled?: string,
+    @Body('scheduledWorkoutId') scheduledWorkoutId?: string,
   ): Promise<ImportedActivity> {
     const autoPair = autoPairWithScheduled === 'true' || autoPairWithScheduled === undefined;
 
@@ -85,6 +88,7 @@ export class ActivityImportController {
       buffer: file.buffer,
       filename: file.originalname,
       autoPairWithScheduled: autoPair,
+      scheduledWorkoutId,
     });
   }
 
@@ -125,6 +129,7 @@ export class ActivityImportController {
       new ParseFilePipe({
         validators: [
           new MaxFileSizeValidator({ maxSize: 50 * 1024 * 1024 }), // 50MB per file
+          new FitFileValidator({}),
         ],
       }),
     )
@@ -235,9 +240,7 @@ export class ActivityImportController {
       new ParseFilePipe({
         validators: [
           new MaxFileSizeValidator({ maxSize: 10 * 1024 * 1024 }), // 10MB
-          new FileTypeValidator({
-            fileType: /\.(fit|fit\.gz)$/i,
-          }),
+          new FitFileValidator({}),
         ],
       }),
     )
@@ -296,6 +299,7 @@ export class ActivityImportController {
       new ParseFilePipe({
         validators: [
           new MaxFileSizeValidator({ maxSize: 10 * 1024 * 1024 }), // 10MB per file
+          new FitFileValidator({}),
         ],
       }),
     )

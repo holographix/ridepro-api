@@ -155,19 +155,21 @@ export class FitParserService {
       const hasRecordMessages = messages.recordMesgs?.length > 0;
       const hasSessionMessages = messages.sessionMesgs?.length > 0;
 
-      if (hasWorkoutMessages || hasWorkoutStepMessages) {
-        // This is a PLANNED WORKOUT from TrainingPeaks
-        const plannedWorkout = this.parsePlannedWorkout(messages);
-        return {
-          fileType: 'planned_workout',
-          plannedWorkout,
-        };
-      } else if (hasRecordMessages || hasSessionMessages) {
-        // This is a COMPLETED ACTIVITY (Garmin, Zwift, etc.)
+      // IMPORTANT: Some TrainingPeaks files contain BOTH the planned workout AND the completed activity
+      // In this case, prioritize the completed activity (recordMesgs) over the planned workout
+      if (hasRecordMessages || hasSessionMessages) {
+        // This is a COMPLETED ACTIVITY (Garmin, Zwift, TrainingPeaks completed)
         const completedActivity = this.parseCompletedActivity(messages, filename);
         return {
           fileType: 'completed_activity',
           completedActivity,
+        };
+      } else if (hasWorkoutMessages || hasWorkoutStepMessages) {
+        // This is a PLANNED WORKOUT from TrainingPeaks (no activity data)
+        const plannedWorkout = this.parsePlannedWorkout(messages);
+        return {
+          fileType: 'planned_workout',
+          plannedWorkout,
         };
       } else {
         throw new BadRequestException(

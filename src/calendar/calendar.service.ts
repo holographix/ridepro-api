@@ -18,6 +18,7 @@ export class CalendarService {
             workout: {
               include: { category: true },
             },
+            activities: true, // Include linked FIT file imports
           },
           orderBy: [{ dayIndex: 'asc' }, { sortOrder: 'asc' }],
         },
@@ -40,6 +41,7 @@ export class CalendarService {
             workout: {
               include: { category: true },
             },
+            activities: true, // Include linked FIT file imports
           },
           orderBy: [{ dayIndex: 'asc' }, { sortOrder: 'asc' }],
         },
@@ -68,6 +70,7 @@ export class CalendarService {
             workout: {
               include: { category: true },
             },
+            activities: true, // Include linked FIT file imports
           },
           orderBy: [{ dayIndex: 'asc' }, { sortOrder: 'asc' }],
         },
@@ -176,6 +179,24 @@ export class CalendarService {
       data: {
         completed,
         completedAt: completed ? new Date() : null,
+        // Clear skipped flag when marking as completed
+        skipped: completed ? false : undefined,
+        skipReason: completed ? null : undefined,
+        skippedAt: completed ? null : undefined,
+      },
+    });
+  }
+
+  async skipWorkout(id: string, skipReason?: string) {
+    return this.prisma.scheduledWorkout.update({
+      where: { id },
+      data: {
+        skipped: true,
+        skipReason,
+        skippedAt: new Date(),
+        // Clear completed flag when skipping
+        completed: false,
+        completedAt: null,
       },
     });
   }
@@ -343,6 +364,7 @@ export class CalendarService {
             workout: {
               include: { category: true },
             },
+            activities: true, // Include linked FIT file imports
           },
           orderBy: [{ dayIndex: 'asc' }, { sortOrder: 'asc' }],
         },
@@ -482,6 +504,7 @@ export class CalendarService {
             workout: {
               include: { category: true },
             },
+            activities: true, // Include linked FIT file imports
           },
           orderBy: [{ dayIndex: 'asc' }, { sortOrder: 'asc' }],
         },
@@ -528,6 +551,41 @@ export class CalendarService {
             athleteId: true,
             athlete: { select: { id: true, fullName: true, ftp: true } },
             coach: { select: { id: true, fullName: true } },
+          },
+        },
+        activities: {
+          select: {
+            id: true,
+            name: true,
+            activityType: true,
+            source: true,
+            fileFormat: true,
+            startTime: true,
+            endTime: true,
+            durationSeconds: true,
+            movingTime: true,
+            distanceMeters: true,
+            elevationGain: true,
+            elevationLoss: true,
+            avgPower: true,
+            maxPower: true,
+            normalizedPower: true,
+            avgHeartRate: true,
+            maxHeartRate: true,
+            avgCadence: true,
+            maxCadence: true,
+            avgSpeed: true,
+            maxSpeed: true,
+            tss: true,
+            intensityFactor: true,
+            calories: true,
+            hasGPS: true,
+            startLatitude: true,
+            startLongitude: true,
+            temperature: true,
+            telemetryData: true,
+            laps: true,
+            notes: true,
           },
         },
       },

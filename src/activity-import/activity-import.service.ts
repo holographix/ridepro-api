@@ -19,6 +19,7 @@ export interface ImportActivityDto {
   buffer: Buffer;
   filename: string;
   autoPairWithScheduled?: boolean; // Auto-match with scheduled workouts
+  scheduledWorkoutId?: string; // Direct pairing with specific workout (skips auto-matching)
 }
 
 export interface ImportedActivity {
@@ -40,7 +41,7 @@ export class ActivityImportService {
    * Import a single activity from FIT file
    */
   async importActivity(dto: ImportActivityDto): Promise<ImportedActivity> {
-    const { athleteId, buffer, filename, autoPairWithScheduled = true } = dto;
+    const { athleteId, buffer, filename, autoPairWithScheduled = true, scheduledWorkoutId } = dto;
 
     // Verify athlete exists
     const athlete = await this.prisma.user.findUnique({
@@ -65,11 +66,17 @@ export class ActivityImportService {
     // Convert to database format
     const activity = await this.saveActivity(athleteId, activityData, filename, buffer.length);
 
-    // Optionally pair with scheduled workout
+    // Pair with scheduled workout
     let paired = false;
     let pairedWorkoutName: string | undefined;
 
-    if (autoPairWithScheduled) {
+    if (scheduledWorkoutId) {
+      // Direct pairing with specific scheduled workout
+      const pairing = await this.directPairWithScheduledWorkout(scheduledWorkoutId, activity);
+      paired = pairing.paired;
+      pairedWorkoutName = pairing.workoutName;
+    } else if (autoPairWithScheduled) {
+      // Auto-matching logic
       const pairing = await this.autoPairWithScheduledWorkout(athleteId, activity);
       paired = pairing.paired;
       pairedWorkoutName = pairing.workoutName;
@@ -308,6 +315,59 @@ export class ActivityImportService {
     return {
       paired: true,
       workoutName: bestMatch.workout.name,
+    };
+  }
+
+  /**
+   * Directly pair activity with a specific scheduled workout (from Report tab)
+   * Skips auto-matching logic and pairs with the exact workout specified
+   */
+  private async directPairWithScheduledWorkout(
+    scheduledWorkoutId: string,
+    activity: Activity,
+  ): Promise<{ paired: boolean; workoutName?: string }> {
+    // Fetch the scheduled workout to verify it exists and get workout name
+    const scheduledWorkout = await this.prisma.scheduledWorkout.findUnique({
+      where: { id: scheduledWorkoutId },
+      include: {
+        workout: true,
+      },
+    });
+
+    if (!scheduledWorkout) {
+      this.logger.warn(`Scheduled workout ${scheduledWorkoutId} not found for direct pairing`);
+      return { paired: false };
+    }
+
+    // Pair activity with scheduled workout
+    await this.prisma.activity.update({
+      where: { id: activity.id },
+      data: {
+        scheduledWorkoutId: scheduledWorkout.id,
+      },
+    });
+
+    // Mark workout as completed and populate actual results
+    await this.prisma.scheduledWorkout.update({
+      where: { id: scheduledWorkout.id },
+      data: {
+        completed: true,
+        completedAt: activity.startTime,
+        actualDurationSeconds: activity.durationSeconds,
+        actualTSS: activity.tss,
+        actualIF: activity.intensityFactor,
+        avgPower: activity.avgPower,
+        avgHeartRate: activity.avgHeartRate,
+      },
+    });
+
+    this.logger.log(
+      `Directly paired activity "${activity.name}" with scheduled workout "${scheduledWorkout.workout.name}"`,
+    );
+
+    return {
+      paired: true,
+      workoutName: scheduledWorkout.workout.name,
     };
   }
 

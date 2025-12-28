@@ -119,6 +119,14 @@ export class CalendarController {
     return this.calendarService.markWorkoutCompleted(id, data.completed);
   }
 
+  @Put('scheduled/:id/skip')
+  skipWorkout(
+    @Param('id') id: string,
+    @Body() data: { skipReason?: string },
+  ) {
+    return this.calendarService.skipWorkout(id, data.skipReason);
+  }
+
   @Put('scheduled/:id/structure')
   modifyScheduledWorkoutStructure(
     @Param('id') id: string,
