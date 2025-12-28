@@ -50,6 +50,8 @@ async function bootstrap() {
       'http://localhost:5173',
       'http://localhost:3000',
       'https://ridepro.pixelsmasher.io',
+      'https://app.ridepro.dev',
+      'https://api.ridepro.dev',
     ],
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
