@@ -23,7 +23,7 @@ export const COACH_HR_ZONES = {
   z2: { name: 'Resistenza', min: 68, max: 83 },          // Endurance: 68-83% FC Soglia
   z3: { name: 'Tempo (Medio)', min: 83, max: 94 },       // Tempo: 83-94% FC Soglia
   z4: { name: 'Soglia Lattacida', min: 94, max: 105 },   // Threshold: 94-105% FC Soglia
-  z5: { name: 'VO2MAX', min: 105, max: 120 },            // VO2Max: 105-120% FC Soglia
+  z5: { name: 'VO2MAX', min: 105, max: 999 },            // VO2Max: >105% FC Soglia (no upper limit)
   z6: { name: 'Capacità Anaerobica', min: null, max: null }, // No HR zones for anaerobic
 };
 
@@ -218,11 +218,11 @@ export class ZonesService {
       return {
         athleteId,
         zoneSystem: 'STANDARD',
-        zone1Max: 60,
-        zone2Max: 70,
-        zone3Max: 80,
-        zone4Max: 90,
-        zone5Max: 100,
+        zone1Max: 68,
+        zone2Max: 83,
+        zone3Max: 94,
+        zone4Max: 105,
+        zone5Max: 999,
       };
     }
 
@@ -238,11 +238,11 @@ export class ZonesService {
       create: {
         athleteId,
         zoneSystem: data.zoneSystem || 'STANDARD',
-        zone1Max: data.zone1Max ?? 60,
-        zone2Max: data.zone2Max ?? 70,
-        zone3Max: data.zone3Max ?? 80,
-        zone4Max: data.zone4Max ?? 90,
-        zone5Max: data.zone5Max ?? 100,
+        zone1Max: data.zone1Max ?? 68,
+        zone2Max: data.zone2Max ?? 83,
+        zone3Max: data.zone3Max ?? 94,
+        zone4Max: data.zone4Max ?? 105,
+        zone5Max: data.zone5Max ?? 999,
       },
       update: {
         zoneSystem: data.zoneSystem,
@@ -274,7 +274,7 @@ export class ZonesService {
       zone2Max: 83,  // Z2: 68-83% FC Soglia
       zone3Max: 94,  // Z3: 83-94% FC Soglia
       zone4Max: 105, // Z4: 94-105% FC Soglia
-      zone5Max: 120, // Z5: 105-120% FC Soglia
+      zone5Max: 999, // Z5: >105% FC Soglia (no upper limit)
     };
 
     return [
@@ -314,9 +314,9 @@ export class ZonesService {
         zone: 5,
         name: 'VO2MAX',
         minBPM: Math.round(fcSoglia * (zones.zone4Max! / 100)),
-        maxBPM: Math.round(fcSoglia * (zones.zone5Max! / 100)),
+        maxBPM: null, // Open-ended (>105% FC Soglia)
         minPercent: zones.zone4Max!,
-        maxPercent: zones.zone5Max!,
+        maxPercent: null, // Open-ended
       },
     ];
   }
